@@ -57,11 +57,19 @@ argon-oled status     # Status ausgeben
 * Grafisches Control Center (Tkinter) mit pixelgenauem Live-Spiegel des OLED-Displays über `/dev/shm/argon_oled_fb.bin`.
 * Konfiguration von automatischem Kachelwechsel, Bildschirmschoner-Zeiten, Tastenaktionen und Kachel-Varianten.
 
+<p align="center">
+  <img src="screenshots/control_center.png" alt="Argon ONE V5 OLED Control Center & Monitor" width="550">
+</p>
+
 ### 4. Visueller Kachel-Designer & Screen Studio (`argon_card_builder.py`)
 * 128×64 Arbeitsfläche mit 4× Vergrößerung und 1px-Sicherheitsrand-Überwachung.
 * **Eingebauter 1-Bit Konverter:** Importiert SVG-, XBM- und Bilddateien, skaliert sie wahlweise auf 16×16 oder 24×24 und exportiert Standard-XBMs.
 * **Portabler Kachel-Bundler:** Speichert Designs als `.argoncard`-Paket (ZIP) inklusive aller verwendeten Grafiken.
 * **Live-Spiegelung:** Überträgt den aktuellen Entwurf per Knopfdruck sofort auf das echte OLED-Display.
+
+<p align="center">
+  <img src="screenshots/card_builder.png" alt="Argon ONE V5 Kachel-Designer & Screen Studio" width="750">
+</p>
 
 ---
 
