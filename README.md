@@ -24,6 +24,7 @@ Das Projekt besteht aus vier Kernkomponenten:
 argon-v5-oled/
 ├── src/                  (C-Daemon: SSD1306 I2C-Treiber, Hardware-Taste, Sensoren)
 ├── argon-oled            (C-CLI: Steuerbefehle für Terminal und Skripte)
+├── argon_hw_discovery.py (Python: Hardware & Sensor Discovery Engine)
 ├── argon-oled-desktop    (Python/Tkinter: Desktop Control Center mit Live-OLED-Spiegel)
 └── argon_card_builder.py (Python/Tkinter: Visueller Kachel-Designer mit SVG/XBM-Konverter)
 ```
@@ -45,6 +46,8 @@ argon-v5-oled/
 ### 2. Kommandozeilen-Tool (`argon-oled`)
 Schnelle Steuerung aus dem Terminal oder für Tastaturkürzel:
 ```bash
+argon-oled sensors    # Scannt alle Hardware-Sensoren (Thermik, PMIC, GPU, RAID, USB)
+argon-oled sensors --json # Maschinenlesbare JSON-Ausgabe
 argon-oled next       # Nächste Kachel
 argon-oled prev       # Vorherige Kachel
 argon-oled screen 1   # Direkt zu Kachel 1 springen

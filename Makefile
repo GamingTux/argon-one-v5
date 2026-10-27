@@ -22,6 +22,7 @@ install: all
 	install -m 755 argon-v5-oled $(DESTDIR)/usr/bin/argon-v5-oled
 	install -m 755 argon-oled $(DESTDIR)/usr/bin/argon-oled
 	install -m 755 argon-oled-desktop $(DESTDIR)/usr/bin/argon-oled-desktop
+	install -m 755 argon_hw_discovery.py $(DESTDIR)/usr/bin/argon-hw-discover
 	install -m 755 argon_card_builder.py $(DESTDIR)/usr/bin/argon-card-builder
 	install -m 755 oled_engine.py $(DESTDIR)/usr/bin/oled_engine.py
 	install -d $(DESTDIR)/etc
@@ -37,6 +38,7 @@ deb: all
 	cp argon-v5-oled pkg/usr/bin/
 	cp argon-oled pkg/usr/bin/
 	cp argon-oled-desktop pkg/usr/bin/
+	cp argon_hw_discovery.py pkg/usr/bin/argon-hw-discover
 	cp argon_card_builder.py pkg/usr/bin/argon-card-builder
 	cp oled_engine.py pkg/usr/bin/
 	cp argon-v5-oled.conf pkg/etc/

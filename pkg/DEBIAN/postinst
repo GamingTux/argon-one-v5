@@ -9,6 +9,13 @@ if [ -f "$CONFIG" ] && ! grep -q "^dtoverlay=dwc2,dr_mode=host" "$CONFIG"; then
     echo "dtoverlay=dwc2,dr_mode=host" >> "$CONFIG"
 fi
 
+# Run initial hardware & sensor discovery
+mkdir -p /etc/argon-v5-oled
+if [ -x /usr/bin/argon-hw-discover ]; then
+    echo "Scanning hardware sensors on Raspberry Pi..."
+    /usr/bin/argon-hw-discover --json > /etc/argon-v5-oled/sensors.json 2>/dev/null || true
+fi
+
 systemctl daemon-reload
 systemctl enable argon-v5-oled.service
 systemctl restart argon-v5-oled.service || true

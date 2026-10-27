@@ -4,6 +4,7 @@ dist/
 pkg/usr/bin/argon-v5-oled
 pkg/usr/bin/argon-oled
 pkg/usr/bin/argon-card-builder
+pkg/usr/bin/argon-hw-discover
 pkg/usr/bin/argon-oled-desktop
 pkg/usr/bin/oled_engine.py
 pkg/etc/argon-v5-oled.conf

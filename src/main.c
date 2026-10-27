@@ -246,7 +246,11 @@ static void render_screen_cpu_graph(const SystemTelemetry *t) {
 // KARTE 2: SPEICHER (NVMe & RAM)
 // ----------------------------------------------------
 static void render_screen_nvme_ram_var_a(const SystemTelemetry *t) {
-    oled_draw_badge(1, 1, "NVME", 4, 1, true);
+    if (t->raid_active) {
+        oled_draw_badge(1, 1, t->raid_degraded ? "RAID!" : "RAID", 4, 1, true);
+    } else {
+        oled_draw_badge(1, 1, "NVME", 4, 1, true);
+    }
     char d_buf[32], dp_buf[16];
     snprintf(d_buf, sizeof(d_buf), "%.0f/%.0fG", t->disk_used_gb, t->disk_total_gb);
     snprintf(dp_buf, sizeof(dp_buf), "%2.0f%%", t->disk_percent);
@@ -298,8 +302,12 @@ static void render_screen_nvme_ram_var_c(const SystemTelemetry *t) {
     oled_rect(1, 1, 126, 11, true, 1);
     oled_draw_string(16, 2, "STORAGE & MEMORY", 0);
 
-    // Row 1: NVMe
-    oled_draw_badge(1, 14, "NVME", 3, 1, false);
+    // Row 1: NVMe / RAID
+    if (t->raid_active) {
+        oled_draw_badge(1, 14, t->raid_degraded ? "RAID!" : "RAID", 3, 1, false);
+    } else {
+        oled_draw_badge(1, 14, "NVME", 3, 1, false);
+    }
     oled_draw_progress_bar(33, 15, 35, 9, t->disk_percent);
     oled_draw_equalizer_bars(71, 15, 9, t->nvme_eq_heights, t->nvme_eq_peaks, 7);
     char dp_buf[16];
@@ -315,7 +323,7 @@ static void render_screen_nvme_ram_var_c(const SystemTelemetry *t) {
     snprintf(rp_buf, sizeof(rp_buf), "%2.0f%%", t->ram_percent);
     oled_draw_med_string(101, 31, rp_buf, 1);
 
-    // Row 3: USB (only if mounted)
+    // Row 3: USB or SD
     if (t->usb_mounted) {
         oled_line(1, 45, 126, 45, 1);
         oled_draw_badge(1, 48, "USB", 3, 1, false);
@@ -324,6 +332,12 @@ static void render_screen_nvme_ram_var_c(const SystemTelemetry *t) {
         char up_buf[16];
         snprintf(up_buf, sizeof(up_buf), "%2.0f%%", t->usb_percent);
         oled_draw_med_string(101, 48, up_buf, 1);
+    } else if (t->sd_present) {
+        oled_line(1, 45, 126, 45, 1);
+        oled_draw_badge(1, 48, "SD", 3, 1, false);
+        char sdbuf[32];
+        snprintf(sdbuf, sizeof(sdbuf), "Card: %.0f GB OK", t->sd_size_gb);
+        oled_draw_string(36, 50, sdbuf, 1);
     }
 }
 

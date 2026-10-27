@@ -11,6 +11,7 @@ static void print_usage(const char *prog) {
     printf("Argon ONE V5 OLED Control CLI\n");
     printf("Usage: %s <command>\n\n", prog);
     printf("Commands:\n");
+    printf("  sensors [--json]         Scan and report all standard & expansion hardware sensors\n");
     printf("  next                     Switch to next screen\n");
     printf("  prev                     Switch to previous screen\n");
     printf("  toggle                   Toggle display on / sleep\n");
@@ -28,6 +29,34 @@ int main(int argc, char **argv) {
     if (argc < 2) {
         print_usage(argv[0]);
         return 1;
+    }
+
+    if (strcmp(argv[1], "sensors") == 0 || strcmp(argv[1], "discover") == 0) {
+        const char *script_paths[] = {
+            "/usr/bin/argon-hw-discover",
+            "/usr/bin/argon_hw_discovery.py",
+            "./argon_hw_discovery.py",
+            "/home/playx/Downloads/argon-v5-oled/argon_hw_discovery.py",
+            NULL
+        };
+        const char *found_path = NULL;
+        for (int i = 0; script_paths[i]; i++) {
+            if (access(script_paths[i], X_OK) == 0 || access(script_paths[i], R_OK) == 0) {
+                found_path = script_paths[i];
+                break;
+            }
+        }
+        if (!found_path) {
+            fprintf(stderr, "Error: argon-hw-discover engine not found.\n");
+            return 1;
+        }
+        char exec_cmd[256];
+        if (argc >= 3 && strcmp(argv[2], "--json") == 0) {
+            snprintf(exec_cmd, sizeof(exec_cmd), "%s --json", found_path);
+        } else {
+            snprintf(exec_cmd, sizeof(exec_cmd), "%s", found_path);
+        }
+        return system(exec_cmd);
     }
 
     char cmd[128];

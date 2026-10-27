@@ -18,8 +18,19 @@
 static unsigned long long prev_total = 0, prev_idle = 0;
 static unsigned long long prev_core_total[4] = {0}, prev_core_idle[4] = {0};
 static unsigned long long prev_nvme_read_sectors = 0, prev_nvme_write_sectors = 0;
-static unsigned long long prev_net_rx = 0, prev_net_tx = 0;
 static struct timespec prev_time;
+
+// Sensor & hardware discovery paths (dynamically resolved)
+static char s_cpu_temp_path[128] = "/sys/class/thermal/thermal_zone0/temp";
+static char s_nvme_temp_path[128] = "";
+static char s_rp1_temp_path[128] = "";
+static char s_fan_rpm_path[128] = "";
+static char s_undervolt_path[128] = "";
+static char s_nvme_stat_path[128] = "/sys/block/nvme0n1/stat";
+static char s_gpu_stats_path[128] = "/sys/class/drm/card0/device/gpu_stats";
+
+static unsigned long long prev_gpu_ts = 0;
+static unsigned long long prev_gpu_runtime = 0;
 
 // Synthesizer Equalizer Peak Tracking
 static int prev_nvme_peaks[7] = {1, 1, 1, 1, 1, 1, 1};
@@ -77,15 +88,54 @@ static void update_eq_channel(float activity_val, float max_scale, int base_offs
     }
 }
 
+static void discover_hardware_sensors(void) {
+    // Scan hwmon 0 to 7
+    for (int i = 0; i < 8; i++) {
+        char p[128];
+        snprintf(p, sizeof(p), "/sys/class/hwmon/hwmon%d/name", i);
+        FILE *f = fopen(p, "r");
+        if (!f) continue;
+        char name[64];
+        if (fgets(name, sizeof(name), f)) {
+            char *nl = strchr(name, '\n');
+            if (nl) *nl = '\0';
+            if (strcmp(name, "cpu_thermal") == 0) {
+                snprintf(s_cpu_temp_path, sizeof(s_cpu_temp_path), "/sys/class/hwmon/hwmon%d/temp1_input", i);
+            } else if (strcmp(name, "nvme") == 0) {
+                snprintf(s_nvme_temp_path, sizeof(s_nvme_temp_path), "/sys/class/hwmon/hwmon%d/temp1_input", i);
+            } else if (strcmp(name, "rp1_adc") == 0) {
+                snprintf(s_rp1_temp_path, sizeof(s_rp1_temp_path), "/sys/class/hwmon/hwmon%d/temp1_input", i);
+            } else if (strcmp(name, "pwmfan") == 0) {
+                snprintf(s_fan_rpm_path, sizeof(s_fan_rpm_path), "/sys/class/hwmon/hwmon%d/fan1_input", i);
+            } else if (strcmp(name, "rpi_volt") == 0) {
+                snprintf(s_undervolt_path, sizeof(s_undervolt_path), "/sys/class/hwmon/hwmon%d/in0_lcrit_alarm", i);
+            }
+        }
+        fclose(f);
+    }
+
+    // Dynamic NVMe block detection (find first nvme*n1)
+    for (int i = 0; i < 4; i++) {
+        char bpath[128];
+        snprintf(bpath, sizeof(bpath), "/sys/block/nvme%dn1/stat", i);
+        if (access(bpath, F_OK) == 0) {
+            snprintf(s_nvme_stat_path, sizeof(s_nvme_stat_path), "%s", bpath);
+            break;
+        }
+    }
+}
+
 void telemetry_init(void) {
     clock_gettime(CLOCK_MONOTONIC, &prev_time);
+    discover_hardware_sensors();
 }
 
 static void read_cpu_temp_and_freq(SystemTelemetry *t) {
     t->cpu_temp = 0.0f;
     t->cpu_freq_ghz = 0.0f;
 
-    FILE *f = fopen("/sys/class/thermal/thermal_zone0/temp", "r");
+    FILE *f = fopen(s_cpu_temp_path, "r");
+    if (!f) f = fopen("/sys/class/thermal/thermal_zone0/temp", "r");
     if (f) {
         long mdeg = 0;
         if (fscanf(f, "%ld", &mdeg) == 1) {
@@ -106,44 +156,141 @@ static void read_cpu_temp_and_freq(SystemTelemetry *t) {
 
 static void read_fan_rpm(SystemTelemetry *t) {
     t->fan_rpm = 0;
-    static char cached_path[128] = "";
-
-    if (cached_path[0]) {
-        FILE *f = fopen(cached_path, "r");
+    if (s_fan_rpm_path[0]) {
+        FILE *f = fopen(s_fan_rpm_path, "r");
         if (f) {
             int rpm = 0;
             if (fscanf(f, "%d", &rpm) == 1) t->fan_rpm = rpm;
             fclose(f);
             return;
         }
-        cached_path[0] = '\0';
     }
+}
 
-    // Search hwmon devices for pwmfan or fan1_input
-    for (int i = 0; i < 8; i++) {
-        char p[128];
-        snprintf(p, sizeof(p), "/sys/class/hwmon/hwmon%d/name", i);
-        FILE *f = fopen(p, "r");
-        if (f) {
-            char name[32];
-            if (fgets(name, sizeof(name), f)) {
-                if (strncmp(name, "pwmfan", 6) == 0) {
-                    snprintf(cached_path, sizeof(cached_path), "/sys/class/hwmon/hwmon%d/fan1_input", i);
-                    fclose(f);
-                    break;
+static void read_gpu_telemetry(SystemTelemetry *t) {
+    t->has_gpu = false;
+    t->gpu_usage = 0.0f;
+    t->gpu_freq_mhz = 0;
+
+    if (access(s_gpu_stats_path, F_OK) != 0) return;
+    t->has_gpu = true;
+
+    FILE *f = fopen(s_gpu_stats_path, "r");
+    if (f) {
+        char line[256];
+        unsigned long long cur_ts = 0;
+        unsigned long long active_ns = 0;
+        while (fgets(line, sizeof(line), f)) {
+            char q[32];
+            unsigned long long ts, jobs, rt;
+            if (sscanf(line, "%31s %llu %llu %llu", q, &ts, &jobs, &rt) == 4) {
+                cur_ts = ts;
+                if (strcmp(q, "render") == 0 || strcmp(q, "bin") == 0 || strcmp(q, "tfu") == 0) {
+                    active_ns += rt;
                 }
             }
+        }
+        fclose(f);
+
+        if (prev_gpu_ts > 0 && cur_ts > prev_gpu_ts) {
+            unsigned long long d_ts = cur_ts - prev_gpu_ts;
+            unsigned long long d_act = (active_ns >= prev_gpu_runtime) ? (active_ns - prev_gpu_runtime) : 0;
+            float load = (100.0f * (float)d_act) / (float)d_ts;
+            if (load > 100.0f) load = 100.0f;
+            t->gpu_usage = load;
+        }
+        prev_gpu_ts = cur_ts;
+        prev_gpu_runtime = active_ns;
+    }
+
+    FILE *f_clk = fopen("/sys/kernel/debug/dri/1002000000.v3d/measure_clock", "r");
+    if (f_clk) {
+        char buf[128];
+        if (fgets(buf, sizeof(buf), f_clk)) {
+            char *mhz = strstr(buf, "(");
+            if (mhz) {
+                float f_mhz = 0.0f;
+                if (sscanf(mhz + 1, "%f", &f_mhz) == 1) {
+                    t->gpu_freq_mhz = (int)f_mhz;
+                }
+            }
+        }
+        fclose(f_clk);
+    }
+}
+
+static void read_advanced_sensors(SystemTelemetry *t) {
+    t->nvme_temp = 0.0f;
+    t->rp1_temp = 0.0f;
+    t->undervoltage_alarm = false;
+    t->in_5v_volt = 5.0f;
+
+    if (s_nvme_temp_path[0]) {
+        FILE *f = fopen(s_nvme_temp_path, "r");
+        if (f) {
+            long mdeg = 0;
+            if (fscanf(f, "%ld", &mdeg) == 1) t->nvme_temp = mdeg / 1000.0f;
             fclose(f);
         }
     }
-
-    if (cached_path[0]) {
-        FILE *f = fopen(cached_path, "r");
+    if (s_rp1_temp_path[0]) {
+        FILE *f = fopen(s_rp1_temp_path, "r");
         if (f) {
-            int rpm = 0;
-            if (fscanf(f, "%d", &rpm) == 1) t->fan_rpm = rpm;
+            long mdeg = 0;
+            if (fscanf(f, "%ld", &mdeg) == 1) t->rp1_temp = mdeg / 1000.0f;
             fclose(f);
         }
+    }
+    if (s_undervolt_path[0]) {
+        FILE *f = fopen(s_undervolt_path, "r");
+        if (f) {
+            int alarm = 0;
+            if (fscanf(f, "%d", &alarm) == 1) t->undervoltage_alarm = (alarm != 0);
+            fclose(f);
+        }
+    }
+}
+
+static void read_raid_and_sd(SystemTelemetry *t) {
+    t->raid_active = false;
+    t->raid_degraded = false;
+    t->raid_level[0] = '\0';
+    t->raid_health[0] = '\0';
+    t->sd_present = false;
+    t->sd_size_gb = 0.0f;
+
+    // Check /proc/mdstat
+    FILE *f_md = fopen("/proc/mdstat", "r");
+    if (f_md) {
+        char line[256];
+        while (fgets(line, sizeof(line), f_md)) {
+            char md_name[32], state[32], level[32];
+            if (sscanf(line, "%31s : %31s %31s", md_name, state, level) >= 3) {
+                if (strncmp(md_name, "md", 2) == 0) {
+                    t->raid_active = true;
+                    snprintf(t->raid_level, sizeof(t->raid_level), "%s", level);
+                    snprintf(t->raid_health, sizeof(t->raid_health), "OK");
+                }
+            }
+            if (t->raid_active && strchr(line, '[') && strchr(line, ']')) {
+                if (strstr(line, "[U_]") || strstr(line, "[_U]") || strstr(line, "_")) {
+                    t->raid_degraded = true;
+                    snprintf(t->raid_health, sizeof(t->raid_health), "DEGRADED");
+                }
+            }
+        }
+        fclose(f_md);
+    }
+
+    // MicroSD Check
+    FILE *f_sd = fopen("/sys/block/mmcblk0/size", "r");
+    if (f_sd) {
+        unsigned long long sec = 0;
+        if (fscanf(f_sd, "%llu", &sec) == 1 && sec > 0) {
+            t->sd_present = true;
+            t->sd_size_gb = (float)((sec * 512.0) / (1024.0 * 1024.0 * 1024.0));
+        }
+        fclose(f_sd);
     }
 }
 
@@ -295,7 +442,7 @@ static void read_disk_usage_and_io(SystemTelemetry *t, double dt) {
     }
 
     // Read NVMe I/O stats
-    FILE *f = fopen("/sys/block/nvme0n1/stat", "r");
+    FILE *f = fopen(s_nvme_stat_path, "r");
     if (f) {
         unsigned long long read_sectors = 0, write_sectors = 0;
         unsigned long long dummy;
@@ -550,6 +697,9 @@ void telemetry_update(SystemTelemetry *t) {
     read_cpu_temp_and_freq(t);
     read_fan_rpm(t);
     read_cpu_usage(t);
+    read_gpu_telemetry(t);
+    read_advanced_sensors(t);
+    read_raid_and_sd(t);
     read_mem_usage(t);
     read_disk_usage_and_io(t, dt);
     read_network(t, dt);

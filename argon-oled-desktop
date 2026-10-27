@@ -187,16 +187,19 @@ class ArgonOledApp(tk.Tk):
         tab_buttons = ttk.Frame(self.notebook)
         tab_bright = ttk.Frame(self.notebook)
         tab_variants = ttk.Frame(self.notebook)
+        tab_sensors = ttk.Frame(self.notebook)
 
         self.notebook.add(tab_auto, text=" Automat. Wechsel & Schoner ")
         self.notebook.add(tab_buttons, text=" Hardware-Taste ")
         self.notebook.add(tab_bright, text=" Helligkeit & Dimmen ")
         self.notebook.add(tab_variants, text=" Karten-Designs ")
+        self.notebook.add(tab_sensors, text=" 🔍 Hardware & Sensoren ")
 
         self.build_tab_auto(tab_auto)
         self.build_tab_buttons(tab_buttons)
         self.build_tab_bright(tab_bright)
         self.build_tab_variants(tab_variants)
+        self.build_tab_sensors(tab_sensors)
 
         # Bottom Action & Status Footer
         footer = tk.Frame(main_container, bg=BG_DARK)
@@ -375,6 +378,50 @@ class ArgonOledApp(tk.Tk):
             cb.current(0)
             cb.pack(side=tk.LEFT, fill=tk.X, expand=True)
             self.cb_variants[target] = cb
+
+    def build_tab_sensors(self, parent):
+        top_bar = tk.Frame(parent, bg=BG_CARD)
+        top_bar.pack(fill=tk.X, padx=6, pady=(6, 4))
+
+        tk.Label(top_bar, text="Erkannte Hardware-Sensoren & Systemmetriken:",
+                 bg=BG_CARD, fg=TEXT_PRIMARY, font=("sans-serif", 9, "bold")).pack(side=tk.LEFT)
+
+        tk.Button(top_bar, text="🔄 Sensoren scannen", font=("sans-serif", 8, "bold"),
+                  bg=ACCENT_BLUE, fg="#ffffff", activebackground="#1158c7", bd=0, padx=10, pady=2,
+                  cursor="hand2", command=self.refresh_sensor_data).pack(side=tk.RIGHT)
+
+        self.sensor_text = tk.Text(parent, bg="#0d1117", fg="#c9d1d9", font=("monospace", 8),
+                                   bd=1, relief=tk.SOLID, padx=8, pady=6, height=12)
+        self.sensor_text.pack(fill=tk.BOTH, expand=True, padx=6, pady=(0, 6))
+        self.sensor_text.configure(state=tk.DISABLED)
+
+        self.after(200, self.refresh_sensor_data)
+
+    def refresh_sensor_data(self):
+        script_paths = [
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), "argon_hw_discovery.py"),
+            "/usr/bin/argon-hw-discover",
+            "/usr/bin/argon_hw_discovery.py"
+        ]
+        chosen = None
+        for p in script_paths:
+            if os.path.exists(p):
+                chosen = p
+                break
+
+        if not chosen:
+            return
+
+        try:
+            res = subprocess.run([chosen], capture_output=True, text=True, timeout=3)
+            report = res.stdout.strip()
+            self.sensor_text.configure(state=tk.NORMAL)
+            self.sensor_text.delete("1.0", tk.END)
+            self.sensor_text.insert(tk.END, report)
+            self.sensor_text.configure(state=tk.DISABLED)
+            self.status_lbl.configure(text="✓ Hardware-Sensoren erfolgreich gescannt.", fg="#3fb950")
+        except Exception as e:
+            self.status_lbl.configure(text=f"Fehler beim Sensoren-Scan: {e}", fg="#f85149")
 
     def load_configuration(self):
         conf = {}
