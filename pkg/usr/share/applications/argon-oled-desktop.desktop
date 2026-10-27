@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=Argon ONE OLED Monitor & Control Center
+Comment=Live OLED Mirror and Settings Control Center for Argon ONE V5
+Exec=/usr/bin/argon-oled-desktop
+Icon=utilities-system-monitor
+Terminal=false
+Type=Application
+Categories=Utility;System;Settings;

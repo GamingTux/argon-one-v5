@@ -1,0 +1,9 @@
+#!/bin/bash
+set -e
+
+if [ "$1" = "purge" ]; then
+    rm -f /etc/argon-v5-oled.conf
+    rm -f /run/argon-v5-oled.sock
+fi
+systemctl daemon-reload || true
+exit 0

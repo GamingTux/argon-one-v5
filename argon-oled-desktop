@@ -1,0 +1,524 @@
+#!/usr/bin/env python3
+"""
+Argon ONE V5 OLED Desktop Monitor & Control Center
+Live desktop mirror and comprehensive configuration GUI for Argon ONE V5 OLED display.
+"""
+
+import os
+import sys
+import time
+import subprocess
+import tkinter as tk
+from tkinter import ttk, messagebox
+
+FB_PATH = "/dev/shm/argon_oled_fb.bin"
+CONF_PATH = "/etc/argon-v5-oled.conf"
+
+WIDTH = 128
+HEIGHT = 64
+PIXEL_SIZE = 4
+GAP = 1
+BORDER_X = 14
+BORDER_Y = 14
+
+BG_DARK = "#0d1117"
+BG_CARD = "#161b22"
+BG_CARD_HOVER = "#21262d"
+BORDER_COLOR = "#30363d"
+ACCENT_CYAN = "#00e5ff"
+ACCENT_BLUE = "#1f6feb"
+ACCENT_GREEN = "#238636"
+TEXT_PRIMARY = "#f0f6fc"
+TEXT_SECONDARY = "#8b949e"
+PIXEL_ON = "#00e5ff"
+PIXEL_OFF = "#09121c"
+
+BTN_ACTION_MAP_DE = [
+    ("Nächste Karte", "next"),
+    ("Vorherige Karte", "prev"),
+    ("Display an / aus (Standby)", "toggle_sleep"),
+    ("Display dimmen / aufhellen", "toggle_dim"),
+    ("System herunterfahren (Poweroff)", "shutdown"),
+    ("System neu starten (Reboot)", "reboot"),
+    ("Keine Aktion (Deaktiviert)", "none"),
+]
+
+VARIANT_MAP_DE = {
+    "cpu": [
+        ("Variante A: Hero Temp, Lüfter & 4-Kerne", "a"),
+        ("Variante B: 60s Temperatur-Sparkline", "b"),
+        ("Variante C: Split Kacheln & Auslastung", "c"),
+    ],
+    "mem": [
+        ("Variante A: Stacked 126px Progress Bars", "a"),
+        ("Variante B: Split Kacheln mit großen %-Zahlen", "b"),
+        ("Variante C: Matrix mit USB-Slot", "c"),
+    ],
+    "net": [
+        ("Variante A: Invertierte IP & Traffic-Welle", "a"),
+        ("Variante B: Dual RX/TX Sparklines", "b"),
+        ("Variante C: Hero Download Traffic Meter", "c"),
+    ],
+    "clock": [
+        ("Variante A: Zentrierte Hero Clock & Uptime", "a"),
+        ("Variante B: Gestapelte Retro-Ziffern", "b"),
+        ("Variante C: Terminal Banner Dashboard", "c"),
+    ],
+}
+
+class ArgonOledApp(tk.Tk):
+    def __init__(self):
+        super().__init__()
+        self.title("Argon ONE V5 – OLED Control Center & Monitor")
+        self.configure(bg=BG_DARK)
+        self.resizable(True, True)
+
+        self.last_fb = None
+        self.config_data = {}
+
+        self.setup_styles()
+        self.build_ui()
+        self.load_configuration()
+
+        self.after(50, self.update_display)
+
+    def setup_styles(self):
+        style = ttk.Style(self)
+        style.theme_use("clam")
+
+        style.configure(".", background=BG_DARK, foreground=TEXT_PRIMARY, font=("sans-serif", 9))
+        style.configure("TNotebook", background=BG_DARK, borderwidth=0)
+        style.configure("TNotebook.Tab", background=BG_CARD, foreground=TEXT_SECONDARY, padding=[12, 6], font=("sans-serif", 9, "bold"))
+        style.map("TNotebook.Tab",
+                  background=[("selected", BG_CARD_HOVER), ("active", "#282e39")],
+                  foreground=[("selected", ACCENT_CYAN), ("active", TEXT_PRIMARY)])
+
+        style.configure("TFrame", background=BG_DARK)
+        style.configure("Card.TFrame", background=BG_CARD, relief="solid", borderwidth=1)
+        style.configure("TLabel", background=BG_DARK, foreground=TEXT_PRIMARY)
+        style.configure("Card.TLabel", background=BG_CARD, foreground=TEXT_PRIMARY)
+        style.configure("Header.TLabel", background=BG_CARD, foreground=ACCENT_CYAN, font=("sans-serif", 10, "bold"))
+        style.configure("Sub.TLabel", background=BG_CARD, foreground=TEXT_SECONDARY, font=("sans-serif", 8))
+
+        style.configure("TCheckbutton", background=BG_CARD, foreground=TEXT_PRIMARY, font=("sans-serif", 9))
+        style.map("TCheckbutton", background=[("active", BG_CARD)])
+
+        style.configure("TCombobox", fieldbackground=BG_DARK, background=BG_CARD_HOVER, foreground=TEXT_PRIMARY)
+
+    def build_ui(self):
+        main_container = tk.Frame(self, bg=BG_DARK)
+        main_container.pack(fill=tk.BOTH, expand=True, padx=12, pady=10)
+
+        # ---------------- TOP: OLED MIRROR CANVAS ----------------
+        preview_box = tk.LabelFrame(main_container, text=" LIVE HARDWARE OLED SPIEGEL ", font=("sans-serif", 9, "bold"),
+                                   bg=BG_CARD, fg=ACCENT_CYAN, bd=1, relief=tk.SOLID)
+        preview_box.pack(fill=tk.X, pady=(0, 8), padx=2)
+
+        win_w = WIDTH * (PIXEL_SIZE + GAP) + BORDER_X * 2
+        canvas_h = HEIGHT * (PIXEL_SIZE + GAP) + BORDER_Y * 2
+
+        self.canvas = tk.Canvas(
+            preview_box,
+            width=win_w,
+            height=canvas_h,
+            bg=BG_DARK,
+            highlightthickness=0
+        )
+        self.canvas.pack(pady=6)
+
+        # Bezel around active OLED area
+        bx0 = BORDER_X - 5
+        by0 = BORDER_Y - 5
+        bx1 = win_w - BORDER_X + 5
+        by1 = BORDER_Y + HEIGHT * (PIXEL_SIZE + GAP) + 5
+        self.canvas.create_rectangle(bx0, by0, bx1, by1, outline="#2b313d", width=2, fill="#04070b")
+
+        # Pixel Grid
+        self.pixels = []
+        for y in range(HEIGHT):
+            row = []
+            py = BORDER_Y + y * (PIXEL_SIZE + GAP)
+            for x in range(WIDTH):
+                px = BORDER_X + x * (PIXEL_SIZE + GAP)
+                rect_id = self.canvas.create_rectangle(
+                    px, py, px + PIXEL_SIZE, py + PIXEL_SIZE,
+                    fill=PIXEL_OFF, outline=""
+                )
+                row.append(rect_id)
+            self.pixels.append(row)
+
+        # Controls under mirror
+        ctrl_bar = tk.Frame(preview_box, bg=BG_CARD)
+        ctrl_bar.pack(fill=tk.X, padx=10, pady=(2, 8))
+
+        btn_style = {"bg": "#21262d", "fg": TEXT_PRIMARY, "activebackground": "#30363d",
+                     "activeforeground": "#ffffff", "bd": 0, "padx": 10, "pady": 4, "cursor": "hand2"}
+
+        tk.Button(ctrl_bar, text="◀ Zurück", font=("sans-serif", 9, "bold"),
+                  command=self.prev_screen, **btn_style).pack(side=tk.LEFT, padx=3)
+
+        self.hw_btn = tk.Button(ctrl_bar, text="● HW Taste (Klick)", font=("sans-serif", 9, "bold"),
+                                bg=ACCENT_BLUE, fg="#ffffff", activebackground="#1158c7",
+                                bd=0, padx=14, pady=4, cursor="hand2", command=self.next_screen)
+        self.hw_btn.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=4)
+
+        tk.Button(ctrl_bar, text="Weiter ▶", font=("sans-serif", 9, "bold"),
+                  command=self.next_screen, **btn_style).pack(side=tk.LEFT, padx=3)
+
+        tk.Button(ctrl_bar, text="⚡ Standby", font=("sans-serif", 9),
+                  command=self.toggle_power, **btn_style).pack(side=tk.LEFT, padx=3)
+
+        tk.Button(ctrl_bar, text="🔆 Dimmen", font=("sans-serif", 9),
+                  command=self.toggle_dim, **btn_style).pack(side=tk.LEFT, padx=3)
+
+        # Quick Jump Pills
+        jump_bar = tk.Frame(preview_box, bg=BG_CARD)
+        jump_bar.pack(fill=tk.X, padx=10, pady=(0, 6))
+        for idx, lbl in enumerate(["[1] CPU & Thermik", "[2] Speicher & RAM", "[3] Netzwerk", "[4] Uhr & Heute"]):
+            tk.Button(jump_bar, text=lbl, font=("sans-serif", 8), bg="#1c2128", fg=TEXT_SECONDARY,
+                      activebackground="#30363d", activeforeground=ACCENT_CYAN, bd=0, padx=6, pady=2,
+                      cursor="hand2", command=lambda s=idx: self.set_screen(s)).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=2)
+
+        # ---------------- BOTTOM: SETTINGS NOTEBOOK / PANELS ----------------
+        self.notebook = ttk.Notebook(main_container)
+        self.notebook.pack(fill=tk.BOTH, expand=True, pady=(4, 0))
+
+        tab_auto = ttk.Frame(self.notebook)
+        tab_buttons = ttk.Frame(self.notebook)
+        tab_bright = ttk.Frame(self.notebook)
+        tab_variants = ttk.Frame(self.notebook)
+
+        self.notebook.add(tab_auto, text=" Automat. Wechsel & Schoner ")
+        self.notebook.add(tab_buttons, text=" Hardware-Taste ")
+        self.notebook.add(tab_bright, text=" Helligkeit & Dimmen ")
+        self.notebook.add(tab_variants, text=" Karten-Designs ")
+
+        self.build_tab_auto(tab_auto)
+        self.build_tab_buttons(tab_buttons)
+        self.build_tab_bright(tab_bright)
+        self.build_tab_variants(tab_variants)
+
+        # Bottom Action & Status Footer
+        footer = tk.Frame(main_container, bg=BG_DARK)
+        footer.pack(fill=tk.X, pady=(8, 0))
+
+        self.status_lbl = tk.Label(footer, text="Bereit.", font=("sans-serif", 9), bg=BG_DARK, fg=TEXT_SECONDARY, anchor="w")
+        self.status_lbl.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        tk.Button(footer, text="🎨 Kachel-Designer", font=("sans-serif", 9, "bold"),
+                  bg=ACCENT_BLUE, fg="#ffffff", activebackground="#1158c7", bd=0, padx=12, pady=4,
+                  cursor="hand2", command=self.open_card_builder).pack(side=tk.RIGHT, padx=6)
+
+        tk.Button(footer, text="🔄 Neu laden", font=("sans-serif", 9), bg="#21262d", fg=TEXT_PRIMARY,
+                  activebackground="#30363d", bd=0, padx=10, pady=4, cursor="hand2", command=self.load_configuration).pack(side=tk.RIGHT, padx=4)
+
+        tk.Button(footer, text="💾 Einstellungen anwenden & speichern", font=("sans-serif", 9, "bold"),
+                  bg=ACCENT_GREEN, fg="#ffffff", activebackground="#2ea043", bd=0, padx=16, pady=4,
+                  cursor="hand2", command=self.save_configuration).pack(side=tk.RIGHT, padx=4)
+
+        # Keybindings
+        self.canvas.bind("<Button-1>", lambda e: self.next_screen())
+        self.canvas.bind("<Button-3>", lambda e: self.prev_screen())
+        self.bind("<space>", lambda e: self.next_screen())
+        self.bind("<Right>", lambda e: self.next_screen())
+        self.bind("<Left>", lambda e: self.prev_screen())
+        self.bind("t", lambda e: self.toggle_power())
+        self.bind("d", lambda e: self.toggle_dim())
+        self.bind("q", lambda e: self.destroy())
+        self.bind("<Escape>", lambda e: self.destroy())
+        for i in range(4):
+            self.bind(str(i + 1), lambda e, idx=i: self.set_screen(idx))
+
+    def build_tab_auto(self, parent):
+        box1 = tk.LabelFrame(parent, text=" Automatischer Kachelwechsel (Auto-Cycle) ", bg=BG_CARD, fg=TEXT_PRIMARY, bd=1, relief=tk.SOLID)
+        box1.pack(fill=tk.X, padx=6, pady=6)
+
+        self.var_cycle_enable = tk.BooleanVar(value=False)
+        cb1 = ttk.Checkbutton(box1, text="Kacheln automatisch durchwechseln", variable=self.var_cycle_enable, command=self.on_cycle_toggle)
+        cb1.pack(anchor="w", padx=12, pady=(8, 4))
+
+        f_dur = tk.Frame(box1, bg=BG_CARD)
+        f_dur.pack(fill=tk.X, padx=12, pady=(0, 10))
+
+        self.lbl_cycle_val = tk.Label(f_dur, text="10 Sekunden pro Karte", bg=BG_CARD, fg=ACCENT_CYAN, font=("sans-serif", 9, "bold"))
+        self.lbl_cycle_val.pack(anchor="w")
+
+        self.scale_cycle = tk.Scale(f_dur, from_=3, to=60, orient=tk.HORIZONTAL, bg=BG_CARD, fg=TEXT_PRIMARY,
+                                    highlightthickness=0, troughcolor="#21262d", command=self.update_cycle_label)
+        self.scale_cycle.set(10)
+        self.scale_cycle.pack(fill=tk.X)
+
+        box2 = tk.LabelFrame(parent, text=" Bildschirmschoner (Screensaver & Anti-Burn-In) ", bg=BG_CARD, fg=TEXT_PRIMARY, bd=1, relief=tk.SOLID)
+        box2.pack(fill=tk.X, padx=6, pady=6)
+
+        self.var_saver_enable = tk.BooleanVar(value=False)
+        cb2 = ttk.Checkbutton(box2, text="Display nach Inaktivität ausschalten (Bildschirmschoner)", variable=self.var_saver_enable, command=self.on_saver_toggle)
+        cb2.pack(anchor="w", padx=12, pady=(8, 4))
+
+        f_sav = tk.Frame(box2, bg=BG_CARD)
+        f_sav.pack(fill=tk.X, padx=12, pady=(0, 8))
+
+        self.lbl_saver_val = tk.Label(f_sav, text="120 Sekunden (2 Minuten)", bg=BG_CARD, fg=ACCENT_CYAN, font=("sans-serif", 9, "bold"))
+        self.lbl_saver_val.pack(anchor="w")
+
+        self.scale_saver = tk.Scale(f_sav, from_=15, to=600, orient=tk.HORIZONTAL, bg=BG_CARD, fg=TEXT_PRIMARY,
+                                    highlightthickness=0, troughcolor="#21262d", command=self.update_saver_label)
+        self.scale_saver.set(120)
+        self.scale_saver.pack(fill=tk.X)
+
+        tk.Label(box2, text="Hinweis: Ein Druck auf die Hardware-Taste oder eine Überhitzung weckt das OLED sofort auf.",
+                 bg=BG_CARD, fg=TEXT_SECONDARY, font=("sans-serif", 8)).pack(anchor="w", padx=12, pady=(0, 8))
+
+    def on_cycle_toggle(self):
+        state = tk.NORMAL if self.var_cycle_enable.get() else tk.DISABLED
+        self.scale_cycle.configure(state=state)
+        self.update_cycle_label(self.scale_cycle.get())
+
+    def update_cycle_label(self, val):
+        if not self.var_cycle_enable.get():
+            self.lbl_cycle_val.configure(text="Deaktiviert (Nur manuelle Umschaltung per Taste)", fg=TEXT_SECONDARY)
+        else:
+            self.lbl_cycle_val.configure(text=f"{val} Sekunden pro Karte", fg=ACCENT_CYAN)
+
+    def on_saver_toggle(self):
+        state = tk.NORMAL if self.var_saver_enable.get() else tk.DISABLED
+        self.scale_saver.configure(state=state)
+        self.update_saver_label(self.scale_saver.get())
+
+    def update_saver_label(self, val):
+        if not self.var_saver_enable.get():
+            self.lbl_saver_val.configure(text="Deaktiviert (Display bleibt dauerhaft aktiv)", fg=TEXT_SECONDARY)
+        else:
+            mins = int(val) // 60
+            secs = int(val) % 60
+            time_str = f"{mins}m {secs}s" if mins > 0 else f"{secs}s"
+            self.lbl_saver_val.configure(text=f"{val} Sekunden ({time_str})", fg=ACCENT_CYAN)
+
+    def build_tab_buttons(self, parent):
+        box = tk.LabelFrame(parent, text=" Hardware-Tastendruck (RP1 GPIO 4 am OLED) ", bg=BG_CARD, fg=TEXT_PRIMARY, bd=1, relief=tk.SOLID)
+        box.pack(fill=tk.X, padx=6, pady=6)
+
+        # Short press
+        tk.Label(box, text="1. Kurzer Tastendruck (Klick < 1,2s):", font=("sans-serif", 9, "bold"), bg=BG_CARD, fg=TEXT_PRIMARY).pack(anchor="w", padx=12, pady=(10, 2))
+        self.cb_btn_short = ttk.Combobox(box, state="readonly", values=[label for label, _ in BTN_ACTION_MAP_DE], width=42)
+        self.cb_btn_short.current(0)
+        self.cb_btn_short.pack(anchor="w", padx=12, pady=(0, 10))
+
+        # Long press
+        tk.Label(box, text="2. Langer Tastendruck (Halten > 1,2s):", font=("sans-serif", 9, "bold"), bg=BG_CARD, fg=TEXT_PRIMARY).pack(anchor="w", padx=12, pady=(2, 2))
+        self.cb_btn_long = ttk.Combobox(box, state="readonly", values=[label for label, _ in BTN_ACTION_MAP_DE], width=42)
+        self.cb_btn_long.current(2)
+        self.cb_btn_long.pack(anchor="w", padx=12, pady=(0, 12))
+
+        # Explanation
+        info_f = tk.Frame(box, bg="#1c2128", bd=1, relief=tk.SOLID)
+        info_f.pack(fill=tk.X, padx=12, pady=(0, 10))
+        tk.Label(info_f, text="Zusätzliche Gesten:\n• Doppel-Klick: Schaltet immer zur vorherigen Karte zurück.\n• Not-Ausschaltung: 5 Sekunden dauerhaftes Halten fährt das System immer sicher herunter.",
+                 bg="#1c2128", fg=TEXT_SECONDARY, font=("sans-serif", 8), justify=tk.LEFT).pack(anchor="w", padx=8, pady=6)
+
+    def build_tab_bright(self, parent):
+        box = tk.LabelFrame(parent, text=" Display-Helligkeit & Kontrast ", bg=BG_CARD, fg=TEXT_PRIMARY, bd=1, relief=tk.SOLID)
+        box.pack(fill=tk.X, padx=6, pady=6)
+
+        # Brightness
+        f_b1 = tk.Frame(box, bg=BG_CARD)
+        f_b1.pack(fill=tk.X, padx=12, pady=(8, 6))
+
+        self.lbl_bright_val = tk.Label(f_b1, text="Aktive Helligkeit: 200 (78%)", bg=BG_CARD, fg=ACCENT_CYAN, font=("sans-serif", 9, "bold"))
+        self.lbl_bright_val.pack(anchor="w")
+
+        self.scale_bright = tk.Scale(f_b1, from_=10, to=255, orient=tk.HORIZONTAL, bg=BG_CARD, fg=TEXT_PRIMARY,
+                                     highlightthickness=0, troughcolor="#21262d", command=self.update_bright_label)
+        self.scale_bright.set(200)
+        self.scale_bright.pack(fill=tk.X)
+
+        # Dimmed
+        f_b2 = tk.Frame(box, bg=BG_CARD)
+        f_b2.pack(fill=tk.X, padx=12, pady=(0, 10))
+
+        self.lbl_dim_val = tk.Label(f_b2, text="Gedimmte Helligkeit: 25 (10%)", bg=BG_CARD, fg=ACCENT_CYAN, font=("sans-serif", 9, "bold"))
+        self.lbl_dim_val.pack(anchor="w")
+
+        self.scale_dim = tk.Scale(f_b2, from_=0, to=100, orient=tk.HORIZONTAL, bg=BG_CARD, fg=TEXT_PRIMARY,
+                                  highlightthickness=0, troughcolor="#21262d", command=self.update_dim_label)
+        self.scale_dim.set(25)
+        self.scale_dim.pack(fill=tk.X)
+
+        btn_row = tk.Frame(box, bg=BG_CARD)
+        btn_row.pack(fill=tk.X, padx=12, pady=(0, 10))
+
+        tk.Button(btn_row, text="🔆 Dimmen testen (Umschalten)", font=("sans-serif", 9),
+                  bg="#21262d", fg=TEXT_PRIMARY, activebackground="#30363d", bd=0, padx=10, pady=4,
+                  cursor="hand2", command=self.toggle_dim).pack(side=tk.LEFT)
+
+    def update_bright_label(self, val):
+        pct = int(int(val) * 100 / 255)
+        self.lbl_bright_val.configure(text=f"Aktive Helligkeit: {val} ({pct}%)")
+
+    def update_dim_label(self, val):
+        pct = int(int(val) * 100 / 255)
+        self.lbl_dim_val.configure(text=f"Gedimmte Helligkeit: {val} ({pct}%)")
+
+    def build_tab_variants(self, parent):
+        box = tk.LabelFrame(parent, text=" Kartendesign-Auswahl (Varianten A / B / C) ", bg=BG_CARD, fg=TEXT_PRIMARY, bd=1, relief=tk.SOLID)
+        box.pack(fill=tk.X, padx=6, pady=6)
+
+        self.cb_variants = {}
+        for target, title in [("cpu", "1. CPU & Thermik:"), ("mem", "2. Speicher & RAM:"),
+                              ("net", "3. Netzwerk (LAN/WLAN):"), ("clock", "4. Uhrzeit & Heute:")]:
+            f = tk.Frame(box, bg=BG_CARD)
+            f.pack(fill=tk.X, padx=12, pady=4)
+            tk.Label(f, text=title, font=("sans-serif", 9, "bold"), bg=BG_CARD, fg=TEXT_PRIMARY, width=22, anchor="w").pack(side=tk.LEFT)
+
+            items = [lbl for lbl, _ in VARIANT_MAP_DE[target]]
+            cb = ttk.Combobox(f, state="readonly", values=items, width=38)
+            cb.current(0)
+            cb.pack(side=tk.LEFT, fill=tk.X, expand=True)
+            self.cb_variants[target] = cb
+
+    def load_configuration(self):
+        conf = {}
+        if os.path.exists(CONF_PATH):
+            try:
+                with open(CONF_PATH, "r") as f:
+                    for line in f:
+                        line = line.strip()
+                        if line.startswith("#") or not line or "=" not in line:
+                            continue
+                        k, v = line.split("=", 1)
+                        conf[k.strip().lower()] = v.strip().lower()
+            except Exception as e:
+                self.status_lbl.configure(text=f"Fehler beim Lesen der Konfigurationsdatei: {e}", fg="#f85149")
+                return
+
+        # 1. Screen Duration
+        dur = int(conf.get("screen_duration", "0"))
+        if dur > 0:
+            self.var_cycle_enable.set(True)
+            self.scale_cycle.set(dur)
+        else:
+            self.var_cycle_enable.set(False)
+            self.scale_cycle.set(10)
+        self.on_cycle_toggle()
+
+        # 2. Screensaver
+        saver = int(conf.get("screensaver_timeout", "0"))
+        if saver > 0:
+            self.var_saver_enable.set(True)
+            self.scale_saver.set(saver)
+        else:
+            self.var_saver_enable.set(False)
+            self.scale_saver.set(120)
+        self.on_saver_toggle()
+
+        # 3. Brightness
+        b = int(conf.get("brightness", "200"))
+        db = int(conf.get("dim_brightness", "25"))
+        self.scale_bright.set(b)
+        self.scale_dim.set(db)
+        self.update_bright_label(b)
+        self.update_dim_label(db)
+
+        # 4. Button actions
+        btn_s = conf.get("btn_action_short", "next")
+        btn_l = conf.get("btn_action_long", "toggle_sleep")
+
+        for idx, (_, val) in enumerate(BTN_ACTION_MAP_DE):
+            if val == btn_s: self.cb_btn_short.current(idx)
+            if val == btn_l: self.cb_btn_long.current(idx)
+
+        # 5. Variants
+        for target in ["cpu", "mem", "net", "clock"]:
+            v = conf.get(f"variant_{target}", "a")
+            items = VARIANT_MAP_DE[target]
+            for idx, (_, code) in enumerate(items):
+                if code == v:
+                    self.cb_variants[target].current(idx)
+                    break
+
+        self.status_lbl.configure(text=f"Konfiguration geladen aus {CONF_PATH}", fg=TEXT_SECONDARY)
+
+    def save_configuration(self):
+        try:
+            # 1. Screen duration
+            dur = self.scale_cycle.get() if self.var_cycle_enable.get() else 0
+            subprocess.run(["argon-oled", "set", "screen_duration", str(dur)], check=True)
+
+            # 2. Screensaver timeout
+            sav = self.scale_saver.get() if self.var_saver_enable.get() else 0
+            subprocess.run(["argon-oled", "set", "screensaver_timeout", str(sav)], check=True)
+
+            # 3. Brightness
+            b = self.scale_bright.get()
+            db = self.scale_dim.get()
+            subprocess.run(["argon-oled", "set", "brightness", str(b)], check=True)
+            subprocess.run(["argon-oled", "set", "dim_brightness", str(db)], check=True)
+
+            # 4. Button actions
+            idx_s = self.cb_btn_short.current()
+            act_s = BTN_ACTION_MAP_DE[idx_s][1]
+            subprocess.run(["argon-oled", "set", "btn_action_short", act_s], check=True)
+
+            idx_l = self.cb_btn_long.current()
+            act_l = BTN_ACTION_MAP_DE[idx_l][1]
+            subprocess.run(["argon-oled", "set", "btn_action_long", act_l], check=True)
+
+            # 5. Variants
+            for target in ["cpu", "mem", "net", "clock"]:
+                v_idx = self.cb_variants[target].current()
+                v_code = VARIANT_MAP_DE[target][v_idx][1]
+                subprocess.run(["argon-oled", "variant", target, v_code], check=True)
+
+            self.status_lbl.configure(text="✓ Einstellungen erfolgreich im Dienst gespeichert & angewendet!", fg="#3fb950")
+        except Exception as e:
+            self.status_lbl.configure(text=f"Fehler beim Speichern: {e}", fg="#f85149")
+            messagebox.showerror("Fehler", f"Konnte Einstellungen nicht speichern:\n{e}")
+
+    def next_screen(self):
+        subprocess.run(["argon-oled", "next"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    def prev_screen(self):
+        subprocess.run(["argon-oled", "prev"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    def toggle_power(self):
+        subprocess.run(["argon-oled", "toggle"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    def toggle_dim(self):
+        subprocess.run(["argon-oled", "dim"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    def set_screen(self, idx):
+        subprocess.run(["argon-oled", "screen", str(idx)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    def open_card_builder(self):
+        script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "argon_card_builder.py")
+        subprocess.Popen([sys.executable, script])
+
+    def update_display(self):
+        try:
+            if os.path.exists(FB_PATH):
+                with open(FB_PATH, "rb") as f:
+                    fb = f.read()
+
+                if len(fb) >= 1024 and fb != self.last_fb:
+                    for y in range(HEIGHT):
+                        page = y // 8
+                        bit = y % 8
+                        for x in range(WIDTH):
+                            byte_val = fb[page * WIDTH + x]
+                            is_on = (byte_val & (1 << bit)) != 0
+                            old_on = False
+                            if self.last_fb is not None and len(self.last_fb) >= 1024:
+                                old_on = (self.last_fb[page * WIDTH + x] & (1 << bit)) != 0
+                            if self.last_fb is None or is_on != old_on:
+                                color = PIXEL_ON if is_on else PIXEL_OFF
+                                self.canvas.itemconfig(self.pixels[y][x], fill=color)
+
+                    self.last_fb = fb
+        except Exception:
+            pass
+
+        self.after(100, self.update_display)
+
+if __name__ == "__main__":
+    app = ArgonOledApp()
+    app.mainloop()

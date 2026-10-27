@@ -1,0 +1,16 @@
+[Unit]
+Description=Argon ONE V5 OLED Display and Hardware Button Service
+After=multi-user.target
+Wants=multi-user.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/argon-v5-oled
+Restart=always
+RestartSec=3
+KillMode=process
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

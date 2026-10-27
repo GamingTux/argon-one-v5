@@ -1,0 +1,16 @@
+argon-v5-oled
+argon-oled
+dist/
+pkg/usr/bin/argon-v5-oled
+pkg/usr/bin/argon-oled
+pkg/usr/bin/argon-card-builder
+pkg/usr/bin/argon-oled-desktop
+pkg/usr/bin/oled_engine.py
+pkg/etc/argon-v5-oled.conf
+pkg/etc/systemd/system/argon-v5-oled.service
+*.deb
+*.tmp
+*.log
+__pycache__/
+*.pyc
+.DS_Store

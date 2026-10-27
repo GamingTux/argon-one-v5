@@ -1,0 +1,8 @@
+#!/bin/bash
+set -e
+
+if systemctl is-active --quiet argon-v5-oled.service; then
+    systemctl stop argon-v5-oled.service || true
+fi
+systemctl disable argon-v5-oled.service || true
+exit 0

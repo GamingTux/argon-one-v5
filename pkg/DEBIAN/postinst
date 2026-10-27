@@ -1,0 +1,17 @@
+#!/bin/bash
+set -e
+
+CONFIG="/boot/firmware/config.txt"
+if [ -f "$CONFIG" ] && ! grep -q "^dtparam=i2c_arm=on" "$CONFIG"; then
+    echo "dtparam=i2c_arm=on" >> "$CONFIG"
+fi
+if [ -f "$CONFIG" ] && ! grep -q "^dtoverlay=dwc2,dr_mode=host" "$CONFIG"; then
+    echo "dtoverlay=dwc2,dr_mode=host" >> "$CONFIG"
+fi
+
+systemctl daemon-reload
+systemctl enable argon-v5-oled.service
+systemctl restart argon-v5-oled.service || true
+
+echo "argon-v5-oled service enabled and started successfully."
+exit 0
