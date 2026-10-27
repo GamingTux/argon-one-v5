@@ -2,38 +2,33 @@
 #define FONT_H
 
 #include <stdint.h>
+#include <stdbool.h>
 
-// 5x7 ASCII font (characters 32 to 126)
-// Each character is 5 bytes (each byte is 1 column of 7 vertical pixels, LSB at top)
-extern const uint8_t font5x7[95][5];
+// ----------------------------------------------------------------------------
+// Terminus Bold Handcrafted 1-Bit Pixel Fonts
+// ----------------------------------------------------------------------------
 
-// Large font for digits: 12x20 pixels
-// Indices: 0-9 = digits '0'-'9', 10 = ':', 11 = '.', 12 = '%', 13 = 'C', 14 = '°' (degree)
-// Stored as 12 columns x 3 vertical pages (36 bytes per character)
-extern const uint8_t font12x20[15][36];
+// Terminus Bold 6x12 (Small / Micro) - 105 Glyphs (ASCII + Ä Ö Ü ä ö ü ß ° ↑ ↓)
+extern const uint8_t font_terminus_6x12[105][12];
 
-// Custom 8x8 status icons
+// Terminus Bold 8x16 (Medium / Badges / Headers) - 105 Glyphs
+extern const uint8_t font_terminus_8x16[105][16];
+
+// Terminus Bold 11x22 (Large / Hero Digits & Clock) - 22 Glyphs
+extern const uint16_t font_terminus_11x22[22][22];
+
+// UTF-8 & Large Index Helpers
+int font_terminus_lookup_utf8(const char *s, int *bytes_consumed);
+int font_terminus_large_index(char c);
+
+// Icons
 extern const uint8_t icon_cpu[8];
 extern const uint8_t icon_temp[8];
 extern const uint8_t icon_disk[8];
 extern const uint8_t icon_net[8];
 extern const uint8_t icon_clock[8];
 extern const uint8_t icon_ram[8];
-
-
-
-// Additional icons and bold IP font
 extern const uint8_t icon_eth[8];
 extern const uint8_t icon_wifi[8];
-
-// Medium 6x12 ASCII font (characters 32 to 126)
-// 12 bytes per character (1 byte per row, 6 bits MSB-aligned)
-extern const uint8_t font6x12[95][12];
-
-// Bold 7x12 font for IP address: 11 glyphs (0-9 and index 10 = '.')
-// 7 columns x 2 vertical pages (14 bytes per glyph)
-extern const uint8_t font_bold_ip[11][14];
-
-
 
 #endif // FONT_H

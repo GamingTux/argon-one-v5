@@ -500,7 +500,7 @@ class CardBuilderApp(tk.Tk):
 
         # Row 1: Font Size & Color Invert
         tk.Label(grid_f, text="Schrift:", bg=BG_CARD, fg=TEXT_SECONDARY).grid(row=1, column=0, sticky="w", pady=4)
-        self.combo_font = ttk.Combobox(grid_f, values=["small (5×7 px)", "med (6×12 px)", "large (12×20 Hero)"],
+        self.combo_font = ttk.Combobox(grid_f, values=["small (Terminus 6×12)", "med (Terminus 8×16)", "large (Terminus 11×22 Hero)"],
                                        state="readonly", width=16)
         self.combo_font.current(0)
         self.combo_font.grid(row=1, column=1, columnspan=3, sticky="w", pady=4)

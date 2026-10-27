@@ -141,52 +141,13 @@ void oled_rect(int x, int y, int w, int h, bool fill, int color) {
 }
 
 void oled_draw_char(int x, int y, char c, int color) {
-    if (c == '^' || (unsigned char)c == 0xB0) {
-        // Draw crisp 4x4 degree symbol '°'
-        oled_pixel(x + 1, y, color);
-        oled_pixel(x + 2, y, color);
-        oled_pixel(x, y + 1, color);
-        oled_pixel(x + 3, y + 1, color);
-        oled_pixel(x, y + 2, color);
-        oled_pixel(x + 3, y + 2, color);
-        oled_pixel(x + 1, y + 3, color);
-        oled_pixel(x + 2, y + 3, color);
-        return;
-    }
+    char buf[2] = {c, 0};
+    int consumed = 0;
+    int idx = font_terminus_lookup_utf8(buf, &consumed);
+    if (idx < 0 || idx >= 105) idx = (int)('?' - 32);
 
-    if (c < 32 || c > 126) c = '?';
-    int font_idx = c - 32;
-
-    for (int col = 0; col < 5; col++) {
-        uint8_t line = font5x7[font_idx][col];
-        for (int row = 0; row < 7; row++) {
-            if (line & (1 << row)) {
-                oled_pixel(x + col, y + row, color);
-            }
-        }
-    }
-}
-
-void oled_draw_string(int x, int y, const char *str, int color) {
-    while (*str) {
-        if ((unsigned char)str[0] == 0xC2 && (unsigned char)str[1] == 0xB0) {
-            // UTF-8 degree symbol '°'
-            oled_draw_char(x, y, '^', color);
-            x += 5;
-            str += 2;
-            continue;
-        }
-        oled_draw_char(x, y, *str, color);
-        x += (*str == '^') ? 5 : 6; // 5 pixels + 1 pixel space
-        str++;
-    }
-}
-
-void oled_draw_med_char(int x, int y, char c, int color) {
-    if (c < 32 || c > 126) c = '?';
-    int font_idx = c - 32;
     for (int row = 0; row < 12; row++) {
-        uint8_t byte = font6x12[font_idx][row];
+        uint8_t byte = font_terminus_6x12[idx][row];
         for (int col = 0; col < 6; col++) {
             if (byte & (0x80 >> col)) {
                 oled_pixel(x + col, y + row, color);
@@ -195,20 +156,78 @@ void oled_draw_med_char(int x, int y, char c, int color) {
     }
 }
 
-void oled_draw_med_string(int x, int y, const char *str, int color) {
+void oled_draw_string(int x, int y, const char *str, int color) {
+    if (!str) return;
     while (*str) {
-        oled_draw_med_char(x, y, *str, color);
-        x += 7; // 6px char + 1px space
-        str++;
+        int consumed = 0;
+        int idx = font_terminus_lookup_utf8(str, &consumed);
+        if (consumed <= 0) break;
+        if (idx >= 0 && idx < 105) {
+            for (int row = 0; row < 12; row++) {
+                uint8_t byte = font_terminus_6x12[idx][row];
+                for (int col = 0; col < 6; col++) {
+                    if (byte & (0x80 >> col)) {
+                        oled_pixel(x + col, y + row, color);
+                    }
+                }
+            }
+        }
+        x += 6;
+        str += consumed;
+    }
+}
+
+void oled_draw_med_char(int x, int y, char c, int color) {
+    char buf[2] = {c, 0};
+    int consumed = 0;
+    int idx = font_terminus_lookup_utf8(buf, &consumed);
+    if (idx < 0 || idx >= 105) idx = (int)('?' - 32);
+
+    for (int row = 0; row < 16; row++) {
+        uint8_t byte = font_terminus_8x16[idx][row];
+        for (int col = 0; col < 8; col++) {
+            if (byte & (0x80 >> col)) {
+                oled_pixel(x + col, y + row, color);
+            }
+        }
+    }
+}
+
+void oled_draw_med_string(int x, int y, const char *str, int color) {
+    if (!str) return;
+    while (*str) {
+        int consumed = 0;
+        int idx = font_terminus_lookup_utf8(str, &consumed);
+        if (consumed <= 0) break;
+        if (idx >= 0 && idx < 105) {
+            for (int row = 0; row < 16; row++) {
+                uint8_t byte = font_terminus_8x16[idx][row];
+                for (int col = 0; col < 8; col++) {
+                    if (byte & (0x80 >> col)) {
+                        oled_pixel(x + col, y + row, color);
+                    }
+                }
+            }
+        }
+        x += 8;
+        str += consumed;
     }
 }
 
 void oled_draw_badge(int x, int y, const char *text, int pad_x, int pad_y, bool med_font) {
     if (!text || !*text) return;
-    int len = (int)strlen(text);
-    int char_w = med_font ? 7 : 6;
-    int text_w = len * char_w - 1;
-    int text_h = med_font ? 12 : 7;
+    int len = 0;
+    const char *p = text;
+    while (*p) {
+        int c = 0;
+        font_terminus_lookup_utf8(p, &c);
+        if (c <= 0) break;
+        len++;
+        p += c;
+    }
+    int char_w = med_font ? 8 : 6;
+    int text_w = len * char_w;
+    int text_h = med_font ? 16 : 12;
     int badge_w = text_w + 2 * pad_x;
     int badge_h = text_h + 2 * pad_y;
 
@@ -221,33 +240,45 @@ void oled_draw_badge(int x, int y, const char *text, int pad_x, int pad_y, bool 
 }
 
 void oled_draw_large_char(int x, int y, char c, int color) {
-    int idx = -1;
-    if (c >= '0' && c <= '9') idx = c - '0';
-    else if (c == ':') idx = 10;
-    else if (c == '.') idx = 11;
-    else if (c == '%') idx = 12;
-    else if (c == 'C' || c == 'c') idx = 13;
-    else if (c == '^') idx = 14; // degree symbol
-    if (idx < 0) return;
+    int idx = font_terminus_large_index(c);
+    if (idx < 0 || idx >= 22) return;
 
-    for (int page = 0; page < 3; page++) {
-        for (int col = 0; col < 12; col++) {
-            uint8_t byte = font12x20[idx][page * 12 + col];
-            for (int bit = 0; bit < 8; bit++) {
-                int py = y + page * 8 + bit;
-                if (py < y + 24 && (byte & (1 << bit))) {
-                    oled_pixel(x + col, py, color);
-                }
+    for (int row = 0; row < 22; row++) {
+        uint16_t row_bits = font_terminus_11x22[idx][row];
+        for (int col = 0; col < 11; col++) {
+            if (row_bits & (0x8000 >> col)) {
+                oled_pixel(x + col, y + row, color);
             }
         }
     }
 }
 
 void oled_draw_large_string(int x, int y, const char *str, int color) {
+    if (!str) return;
     while (*str) {
-        oled_draw_large_char(x, y, *str, color);
-        x += (*str == ':' || *str == '.') ? 7 : 12;
-        str++;
+        int idx = -1;
+        int adv = 11;
+        if ((unsigned char)str[0] == 0xC2 && (unsigned char)str[1] == 0xB0) {
+            idx = 13; // °
+            str += 2;
+            adv = 8;
+        } else {
+            char c = *str++;
+            idx = font_terminus_large_index(c);
+            if (c == ':' || c == '.') adv = 6;
+            else if (c == '^') adv = 8;
+        }
+        if (idx >= 0 && idx < 22) {
+            for (int row = 0; row < 22; row++) {
+                uint16_t row_bits = font_terminus_11x22[idx][row];
+                for (int col = 0; col < 11; col++) {
+                    if (row_bits & (0x8000 >> col)) {
+                        oled_pixel(x + col, y + row, color);
+                    }
+                }
+            }
+        }
+        x += adv;
     }
 }
 
@@ -358,31 +389,25 @@ int oled_draw_bold_ip(int x, int y, const char *ip_str, int color) {
     while (*ip_str) {
         char c = *ip_str++;
         int idx = -1;
-        int w = 7;
+        int w = 8;
         if (c >= '0' && c <= '9') {
-            idx = c - '0';
-            w = 7;
+            idx = c - 32;
+            w = 8;
         } else if (c == '.') {
-            idx = 10;
-            w = 3;
+            idx = '.' - 32;
+            w = 5;
         }
         if (idx < 0) continue;
 
-        for (int col = 0; col < w; col++) {
-            uint8_t low = font_bold_ip[idx][col];
-            uint8_t high = font_bold_ip[idx][7 + col];
-            for (int r = 0; r < 8; r++) {
-                if (low & (1 << r)) {
-                    oled_pixel(cur_x + col, y + r, color);
-                }
-            }
-            for (int r = 0; r < 4; r++) {
-                if (high & (1 << r)) {
-                    oled_pixel(cur_x + col, y + 8 + r, color);
+        for (int row = 0; row < 16; row++) {
+            uint8_t byte = font_terminus_8x16[idx][row];
+            for (int col = 0; col < w; col++) {
+                if (byte & (0x80 >> col)) {
+                    oled_pixel(cur_x + col, y + row, color);
                 }
             }
         }
-        cur_x += w + 1;
+        cur_x += w;
     }
     return cur_x - x;
 }
@@ -392,29 +417,31 @@ int oled_calc_bold_ip_width(const char *ip_str) {
     while (*ip_str) {
         char c = *ip_str++;
         if (c >= '0' && c <= '9') w += 8;
-        else if (c == '.') w += 4;
+        else if (c == '.') w += 5;
     }
-    return (w > 0) ? (w - 1) : 0;
+    return w;
 }
 
 void oled_draw_string_clipped(int x, int y, const char *str, int clip_x0, int clip_x1, int color) {
     int cur_x = x;
     while (*str) {
-        char c = *str++;
-        if (c < 32 || c > 126) continue;
-        const uint8_t *glyph = font5x7[c - 32];
-        for (int col = 0; col < 5; col++) {
-            int px = cur_x + col;
-            if (px >= clip_x0 && px <= clip_x1) {
-                uint8_t b = glyph[col];
-                for (int row = 0; row < 7; row++) {
-                    if (b & (1 << row)) {
-                        oled_pixel(px, y + row, color);
+        int consumed = 0;
+        int idx = font_terminus_lookup_utf8(str, &consumed);
+        if (consumed <= 0) break;
+        if (idx >= 0 && idx < 105) {
+            for (int col = 0; col < 6; col++) {
+                int px = cur_x + col;
+                if (px >= clip_x0 && px <= clip_x1) {
+                    for (int row = 0; row < 12; row++) {
+                        if (font_terminus_6x12[idx][row] & (0x80 >> col)) {
+                            oled_pixel(px, y + row, color);
+                        }
                     }
                 }
             }
         }
         cur_x += 6;
+        str += consumed;
     }
 }
 
