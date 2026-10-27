@@ -1,5 +1,5 @@
 Package: argon-v5-oled
-Version: 0.1.0-alpha
+Version: 1.1.0-alpha
 Section: utils
 Priority: optional
 Architecture: arm64

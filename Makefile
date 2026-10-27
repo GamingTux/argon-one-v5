@@ -44,7 +44,7 @@ deb: all
 	cp argon-v5-oled.conf pkg/etc/
 	cp argon-v5-oled.service pkg/etc/systemd/system/
 	chmod 755 pkg/usr/bin/*
-	dpkg-deb --build --root-owner-group pkg dist/argon-v5-oled_0.1.0-alpha_arm64.deb
-	cd dist && sha256sum argon-v5-oled_0.1.0-alpha_arm64.deb > SHA256SUMS
+	dpkg-deb --build --root-owner-group pkg dist/argon-v5-oled_1.1.0-alpha_arm64.deb
+	cd dist && sha256sum argon-v5-oled_1.1.0-alpha_arm64.deb > SHA256SUMS
 
 .PHONY: all clean install deb
