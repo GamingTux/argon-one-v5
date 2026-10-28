@@ -23,10 +23,19 @@ Der originale Python-Dienst von Argon40 (`argononed.py` + `argononeoled.py`) ben
   * **Kurzer Druck:** Nächste OLED-Kachel bzw. Aufwecken aus dem Bildschirmschoner
   * **Doppelklick:** Sauberer System-Reboot (`systemctl reboot`)
   * **3 Sekunden Halten:** Sauberer Shutdown (`systemctl poweroff`)
-* **Sofort einsatzbereit nach einer frischen OS-Neuinstallation (100 % Standalone):**
+* **Sofort einsatzbereit nach einer frischen OS-Neuinstallation (100 % Standalone All-in-One Setup):**
   * Benötigt **weder** das originale `argon1v5.sh`-Skript **noch** manuelles `raspi-config`.
-  * Aktiviert bei der Paketinstallation automatisch `dtparam=i2c_arm=on` und lädt `i2c-dev` sofort zur Laufzeit (**das Display springt direkt bei der Installation an – ohne Neustart**).
-  * Richtet automatisch die vorderen USB-2.0-Anschlüsse (`dtoverlay=dwc2,dr_mode=host`), `usb_max_current_enable=1` sowie die Shutdown-Erkennung (`dtparam=uart0=on` + Systemd-Shutdown-Hook) ein.
+  * **OLED-Sofortstart:** Aktiviert bei der Paketinstallation automatisch `dtparam=i2c_arm=on` und lädt `i2c-dev` sofort zur Laufzeit (**das Display springt direkt bei der Installation an – ohne Neustart**).
+  * **Komplette Gehäuse- & Hardware-Einrichtung (`/boot/firmware/config.txt`):**
+    * Front-USB-2.0-Anschlüsse (`dtoverlay=dwc2,dr_mode=host`) & volles USB-Strombudget (`usb_max_current_enable=1`)
+    * Shutdown-Powercut-Erkennung (`dtparam=uart0=on` + Systemd-Shutdown-Hook)
+    * M.2 NVMe-Slot & volle PCIe Gen 3 Geschwindigkeit (`dtparam=nvme`, `dtparam=pciex1_gen=3`)
+    * Sichere CPU-Boost-Konfiguration (`arm_freq=2800`, GPU `v3d_freq` bleibt auf Standard; bereits vorhandene eigene Taktraten werden nicht überschrieben)
+    * Straffe, leise 4-Stufen-PWM-Lüfterkurve direkt über den Kernel-Device-Tree (40 °C / 50 °C / 60 °C / 70 °C, 0 % CPU-Last)
+  * **Sichere System- & I/O-Performance-Optimierungen:**
+    * **CPU-Governor-Tuning (`ondemand`):** Schnellere Taktreaktion bei Lastspitzen (`up_threshold=50`, `sampling_down_factor=2`, `io_is_busy=1`) bei kühlem 1,5-GHz-Leerlauf
+    * **RAM- & Cache-Optimierung (`/etc/sysctl.d/90-argon-v5-perf.conf`):** `vm.swappiness=10` und `vm.vfs_cache_pressure=50` zum Schonen von NVMe/SD-Karte
+    * **NVMe Multiqueue & PCIe-Latenz (`/etc/udev/rules.d/60-argon-v5-perf.rules`):** Direkter `none`-Scheduler, `read_ahead_kb=512`, `rq_affinity=2` und Schutz vor PCIe-ASPM-Latenzen
 
 ### 📦 Schnellinstallation (Legacy Edition)
 ```bash

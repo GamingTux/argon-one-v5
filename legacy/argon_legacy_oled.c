@@ -1002,6 +1002,28 @@ static void *button_monitor_thread(void *arg) {
     return NULL;
 }
 
+static void write_sysfs_str(const char *path, const char *val) {
+    int fd = open(path, O_WRONLY);
+    if (fd >= 0) {
+        ssize_t w = write(fd, val, strlen(val));
+        (void)w;
+        close(fd);
+    }
+}
+
+static void apply_safe_perf_tuning(void) {
+    // 1. Fast CPU frequency ramp-up on load while preserving 1.5 GHz cool idle
+    write_sysfs_str("/sys/devices/system/cpu/cpufreq/ondemand/up_threshold", "50");
+    write_sysfs_str("/sys/devices/system/cpu/cpufreq/ondemand/sampling_down_factor", "2");
+    write_sysfs_str("/sys/devices/system/cpu/cpufreq/ondemand/io_is_busy", "1");
+    write_sysfs_str("/sys/devices/system/cpu/cpufreq/policy0/schedutil/rate_limit_us", "500");
+
+    // 2. Direct multiqueue ('none') & read-ahead for NVMe drives
+    write_sysfs_str("/sys/block/nvme0n1/queue/scheduler", "none");
+    write_sysfs_str("/sys/block/nvme0n1/queue/read_ahead_kb", "512");
+    write_sysfs_str("/sys/block/nvme0n1/queue/rq_affinity", "2");
+}
+
 static void argon_mcu_signal_poweroff(void) {
     int fd = open("/dev/i2c-1", O_RDWR);
     if (fd < 0) fd = open("/dev/i2c-0", O_RDWR);
@@ -1051,6 +1073,7 @@ int main(int argc, char **argv) {
     unlink(SHUTDOWN_FLAGFILE);
 
     init_assets();
+    apply_safe_perf_tuning();
     reload_config_if_needed(true);
     update_cpu_usage();
 
