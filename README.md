@@ -30,7 +30,7 @@ Der originale Python-Dienst von Argon40 (`argononed.py` + `argononeoled.py`) ben
 
 ### 📦 Schnellinstallation (Legacy Edition)
 ```bash
-wget https://github.com/GamingTux/argon-v5-oled/releases/download/v1.0.0-legacy/argon-1v5-oled-legacy_1.0.0_arm64.deb
+wget https://github.com/GamingTux/argon-one-v5-oled/releases/download/v1.0.0-legacy/argon-1v5-oled-legacy_1.0.0_arm64.deb
 sudo apt install ./argon-1v5-oled-legacy_1.0.0_arm64.deb
 ```
 
@@ -75,7 +75,7 @@ screenlist="clock cpu storage ram temp ip"
 
 ### 📦 Installation (Experimentelle Next-Gen Suite)
 ```bash
-wget https://github.com/GamingTux/argon-v5-oled/releases/download/v1.1.0-alpha/argon-v5-oled_1.1.0-alpha_arm64.deb
+wget https://github.com/GamingTux/argon-one-v5-oled/releases/download/v1.1.0-alpha/argon-v5-oled_1.1.0-alpha_arm64.deb
 sudo apt install ./argon-v5-oled_1.1.0-alpha_arm64.deb
 ```
 
