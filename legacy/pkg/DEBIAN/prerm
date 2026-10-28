@@ -1,0 +1,8 @@
+#!/bin/bash
+set -e
+
+if systemctl is-active --quiet argon-1v5-oled-legacy.service 2>/dev/null; then
+    systemctl stop argon-1v5-oled-legacy.service || true
+fi
+systemctl disable argon-1v5-oled-legacy.service 2>/dev/null || true
+exit 0

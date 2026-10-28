@@ -1,0 +1,49 @@
+#!/bin/bash
+set -e
+
+CONFIG="/boot/firmware/config.txt"
+if [ -f "$CONFIG" ] && ! grep -q "^dtparam=i2c_arm=on" "$CONFIG"; then
+    echo "dtparam=i2c_arm=on" >> "$CONFIG"
+fi
+
+# Install default config if not present
+if [ ! -f /etc/argononeoled.conf ]; then
+    cat << 'EOF' > /etc/argononeoled.conf
+#
+# Argon ONE V5 Legacy OLED Configuration
+#
+enabled=Y
+switchduration=10
+screensaver=120
+refreshinterval=1
+screenlist="clock cpu storage ram temp ip"
+EOF
+fi
+
+# Install original .bin assets to /etc/argon/oled if not present
+mkdir -p /etc/argon/oled
+if [ -d /usr/share/argon-1v5-oled-legacy/oled ]; then
+    for f in /usr/share/argon-1v5-oled-legacy/oled/*.bin; do
+        base=$(basename "$f")
+        if [ ! -f "/etc/argon/oled/$base" ]; then
+            cp "$f" "/etc/argon/oled/$base"
+        fi
+    done
+fi
+
+# Stop conflicting OLED services so only one daemon accesses I2C 0x3C and GPIO4
+for svc in argon-v5-oled.service argononed.service; do
+    if systemctl is-active --quiet "$svc" 2>/dev/null; then
+        systemctl stop "$svc" || true
+    fi
+    if systemctl is-enabled --quiet "$svc" 2>/dev/null; then
+        systemctl disable "$svc" || true
+    fi
+done
+
+systemctl daemon-reload
+systemctl enable argon-1v5-oled-legacy.service
+systemctl restart argon-1v5-oled-legacy.service || true
+
+echo "argon-1v5-oled-legacy service enabled and started successfully."
+exit 0

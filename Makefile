@@ -4,8 +4,9 @@ LDFLAGS ?= -pthread -lgpiod -lm
 
 DAEMON_SRCS = src/main.c src/ssd1306.c src/font.c src/telemetry.c src/button.c src/config.c
 CLI_SRCS = src/cli.c
+LEGACY_SRCS = legacy/argon_legacy_oled.c
 
-all: argon-v5-oled argon-oled
+all: argon-v5-oled argon-oled argon-1v5-oled-legacy
 
 argon-v5-oled: $(DAEMON_SRCS)
 	$(CC) $(CFLAGS) $(DAEMON_SRCS) $(LDFLAGS) -o $@
@@ -13,9 +14,12 @@ argon-v5-oled: $(DAEMON_SRCS)
 argon-oled: $(CLI_SRCS)
 	$(CC) $(CFLAGS) $(CLI_SRCS) -o $@
 
+argon-1v5-oled-legacy: $(LEGACY_SRCS) legacy/legacy_assets.h
+	$(CC) $(CFLAGS) $(LEGACY_SRCS) -pthread -lgpiod -o $@
+
 clean:
-	rm -f argon-v5-oled argon-oled
-	rm -rf dist
+	rm -f argon-v5-oled argon-oled argon-1v5-oled-legacy
+	rm -rf dist legacy/pkg/usr legacy/pkg/etc
 
 install: all
 	install -d $(DESTDIR)/usr/bin
@@ -45,6 +49,17 @@ deb: all
 	cp argon-v5-oled.service pkg/etc/systemd/system/
 	chmod 755 pkg/usr/bin/*
 	dpkg-deb --build --root-owner-group pkg dist/argon-v5-oled_1.1.0-alpha_arm64.deb
-	cd dist && sha256sum argon-v5-oled_1.1.0-alpha_arm64.deb > SHA256SUMS
+	cd dist && sha256sum *.deb > SHA256SUMS
 
-.PHONY: all clean install deb
+deb-legacy: argon-1v5-oled-legacy
+	mkdir -p dist
+	mkdir -p legacy/pkg/usr/bin legacy/pkg/usr/share/argon-1v5-oled-legacy/oled legacy/pkg/etc/systemd/system
+	cp argon-1v5-oled-legacy legacy/pkg/usr/bin/
+	cp legacy/argonone-oledconfig legacy/pkg/usr/bin/
+	cp legacy/oled/*.bin legacy/pkg/usr/share/argon-1v5-oled-legacy/oled/
+	cp legacy/argon-1v5-oled-legacy.service legacy/pkg/etc/systemd/system/
+	chmod 755 legacy/pkg/usr/bin/* legacy/pkg/DEBIAN/postinst legacy/pkg/DEBIAN/prerm legacy/pkg/DEBIAN/postrm
+	dpkg-deb --build --root-owner-group legacy/pkg dist/argon-1v5-oled-legacy_1.0.0_arm64.deb
+	cd dist && sha256sum *.deb > SHA256SUMS
+
+.PHONY: all clean install deb deb-legacy
