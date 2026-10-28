@@ -19,7 +19,7 @@ argon-1v5-oled-legacy: $(LEGACY_SRCS) legacy/legacy_assets.h
 
 clean:
 	rm -f argon-v5-oled argon-oled argon-1v5-oled-legacy
-	rm -rf dist legacy/pkg/usr legacy/pkg/etc
+	rm -rf dist legacy/pkg/usr legacy/pkg/etc legacy/pkg/lib
 
 install: all
 	install -d $(DESTDIR)/usr/bin
@@ -53,12 +53,13 @@ deb: all
 
 deb-legacy: argon-1v5-oled-legacy
 	mkdir -p dist
-	mkdir -p legacy/pkg/usr/bin legacy/pkg/usr/share/argon-1v5-oled-legacy/oled legacy/pkg/etc/systemd/system
+	mkdir -p legacy/pkg/usr/bin legacy/pkg/usr/share/argon-1v5-oled-legacy/oled legacy/pkg/etc/systemd/system legacy/pkg/usr/lib/systemd/system-shutdown
 	cp argon-1v5-oled-legacy legacy/pkg/usr/bin/
 	cp legacy/argonone-oledconfig legacy/pkg/usr/bin/
 	cp legacy/oled/*.bin legacy/pkg/usr/share/argon-1v5-oled-legacy/oled/
 	cp legacy/argon-1v5-oled-legacy.service legacy/pkg/etc/systemd/system/
-	chmod 755 legacy/pkg/usr/bin/* legacy/pkg/DEBIAN/postinst legacy/pkg/DEBIAN/prerm legacy/pkg/DEBIAN/postrm
+	cp legacy/argon-1v5-oled-shutdown legacy/pkg/usr/lib/systemd/system-shutdown/
+	chmod 755 legacy/pkg/usr/bin/* legacy/pkg/usr/lib/systemd/system-shutdown/* legacy/pkg/DEBIAN/postinst legacy/pkg/DEBIAN/prerm legacy/pkg/DEBIAN/postrm
 	dpkg-deb --build --root-owner-group legacy/pkg dist/argon-1v5-oled-legacy_1.0.0_arm64.deb
 	cd dist && sha256sum *.deb > SHA256SUMS
 

@@ -230,7 +230,9 @@ static void oled_flush(void) {
         close(shm_fd);
     }
 
-    if (g_i2c_fd < 0) return;
+    if (g_i2c_fd < 0) {
+        if (oled_init_hw() < 0) return;
+    }
 
     // Skip I2C transfer if buffer is identical to last frame
     if (g_has_flushed && memcmp(g_oled_buf, g_last_flushed, OLED_BUF_SIZE) == 0) {
@@ -1000,12 +1002,36 @@ static void *button_monitor_thread(void *arg) {
     return NULL;
 }
 
+static void argon_mcu_signal_poweroff(void) {
+    int fd = open("/dev/i2c-1", O_RDWR);
+    if (fd < 0) fd = open("/dev/i2c-0", O_RDWR);
+    if (fd < 0) return;
+    if (ioctl(fd, I2C_SLAVE, 0x1A) == 0) {
+        // Send register-based poweroff (0x86 = 1) and legacy 0xFF poweroff
+        uint8_t cmd_reg[2] = { 0x86, 0x01 };
+        if (write(fd, cmd_reg, 2) < 0) {
+            uint8_t cmd_legacy = 0xFF;
+            ssize_t r = write(fd, &cmd_legacy, 1);
+            (void)r;
+        }
+    }
+    close(fd);
+}
+
 // ============================================================================
 // Main Display & Service Loop
 // ============================================================================
 int main(int argc, char **argv) {
     if (argc > 1) {
-        if (strcasecmp(argv[1], "SHUTDOWN") == 0 || strcasecmp(argv[1], "FANOFF") == 0) {
+        if (strcasecmp(argv[1], "SHUTDOWN") == 0 || strcasecmp(argv[1], "--shutdown") == 0 || strcasecmp(argv[1], "FANOFF") == 0) {
+            if (strcasecmp(argv[1], "SHUTDOWN") == 0 || strcasecmp(argv[1], "--shutdown") == 0) {
+                FILE *fp = fopen(SHUTDOWN_FLAGFILE, "w");
+                if (fp) {
+                    fputs("signalled", fp);
+                    fclose(fp);
+                }
+                argon_mcu_signal_poweroff();
+            }
             if (oled_init_hw() == 0) {
                 oled_clearbuffer(0);
                 oled_flush();
@@ -1014,7 +1040,7 @@ int main(int argc, char **argv) {
             }
             return 0;
         } else if (strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "-h") == 0) {
-            printf("Usage: %s [SERVICE [OLEDSWITCH] | SHUTDOWN | FANOFF]\n", argv[0]);
+            printf("Usage: %s [SERVICE [OLEDSWITCH] | SHUTDOWN | --shutdown | FANOFF]\n", argv[0]);
             printf("Argon ONE V5 Legacy OLED Daemon (Original Cards + Fast 1s Refresh)\n");
             return 0;
         }
@@ -1022,6 +1048,7 @@ int main(int argc, char **argv) {
 
     signal(SIGINT,  handle_sig);
     signal(SIGTERM, handle_sig);
+    unlink(SHUTDOWN_FLAGFILE);
 
     init_assets();
     reload_config_if_needed(true);

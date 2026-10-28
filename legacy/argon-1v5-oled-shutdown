@@ -1,0 +1,7 @@
+#!/bin/bash
+# Argon ONE V5 Legacy OLED & Case Power-Cut Shutdown Hook
+if [ "$1" = "poweroff" ] || [ "$1" = "halt" ]; then
+    /usr/bin/argon-1v5-oled-legacy --shutdown 2>/dev/null || true
+elif [ -n "$1" ]; then
+    /usr/bin/argon-1v5-oled-legacy FANOFF 2>/dev/null || true
+fi

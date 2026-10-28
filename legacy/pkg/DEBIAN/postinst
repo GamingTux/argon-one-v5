@@ -1,12 +1,52 @@
 #!/bin/bash
 set -e
 
-CONFIG="/boot/firmware/config.txt"
-if [ -f "$CONFIG" ] && ! grep -q "^dtparam=i2c_arm=on" "$CONFIG"; then
-    echo "dtparam=i2c_arm=on" >> "$CONFIG"
+if [ -e /boot/firmware/config.txt ]; then
+    CONFIG="/boot/firmware/config.txt"
+else
+    CONFIG="/boot/config.txt"
 fi
 
-# Install default config if not present
+if [ -f "$CONFIG" ]; then
+    # 1. Enable I2C in config.txt
+    if grep -q "^#dtparam=i2c_arm=on" "$CONFIG"; then
+        sed -i 's/^#dtparam=i2c_arm=on/dtparam=i2c_arm=on/' "$CONFIG"
+    elif ! grep -q "^dtparam=i2c_arm=on" "$CONFIG"; then
+        echo "dtparam=i2c_arm=on" >> "$CONFIG"
+    fi
+
+    # 2. Enable Argon ONE V5 Front USB 2.0 ports (dwc2 host mode) & USB max current
+    if ! grep -q "^dtoverlay=dwc2,dr_mode=host" "$CONFIG"; then
+        echo "dtoverlay=dwc2,dr_mode=host" >> "$CONFIG"
+    fi
+    if ! grep -q "^usb_max_current_enable=1" "$CONFIG"; then
+        echo "usb_max_current_enable=1" >> "$CONFIG"
+    fi
+
+    # 3. Enable UART0 so Argon ONE V5 MCU detects Pi 5 shutdown state for power-cut
+    if ! grep -q "^dtparam=uart0=on" "$CONFIG"; then
+        echo "dtparam=uart0=on" >> "$CONFIG"
+    fi
+fi
+
+# 4. Ensure i2c-dev kernel module is loaded on boot and immediately at runtime (no reboot needed for OLED!)
+mkdir -p /etc/modules-load.d
+echo "i2c-dev" > /etc/modules-load.d/argon-i2c.conf
+if [ -f /etc/modules ] && ! grep -q "^i2c-dev" /etc/modules; then
+    echo "i2c-dev" >> /etc/modules
+fi
+
+if command -v raspi-config >/dev/null 2>&1; then
+    raspi-config nonint do_i2c 0 2>/dev/null || true
+fi
+if command -v dtparam >/dev/null 2>&1; then
+    dtparam i2c_arm=on 2>/dev/null || true
+fi
+modprobe i2c_bcm2835 2>/dev/null || true
+modprobe i2c_designware_platform 2>/dev/null || true
+modprobe i2c-dev 2>/dev/null || true
+
+# 5. Install default OLED config if not present
 if [ ! -f /etc/argononeoled.conf ]; then
     cat << 'EOF' > /etc/argononeoled.conf
 #
@@ -20,7 +60,7 @@ screenlist="clock cpu storage ram temp ip"
 EOF
 fi
 
-# Install original .bin assets to /etc/argon/oled if not present
+# 6. Install original .bin assets to /etc/argon/oled if not present
 mkdir -p /etc/argon/oled
 if [ -d /usr/share/argon-1v5-oled-legacy/oled ]; then
     for f in /usr/share/argon-1v5-oled-legacy/oled/*.bin; do
@@ -31,7 +71,7 @@ if [ -d /usr/share/argon-1v5-oled-legacy/oled ]; then
     done
 fi
 
-# Stop conflicting OLED services so only one daemon accesses I2C 0x3C and GPIO4
+# 7. Stop conflicting OLED services so only one daemon accesses I2C 0x3C and GPIO4
 for svc in argon-v5-oled.service argononed.service; do
     if systemctl is-active --quiet "$svc" 2>/dev/null; then
         systemctl stop "$svc" || true
