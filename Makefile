@@ -19,7 +19,7 @@ argon-1v5-oled-legacy: $(LEGACY_SRCS) legacy/legacy_assets.h
 
 clean:
 	rm -f argon-v5-oled argon-oled argon-1v5-oled-legacy
-	rm -rf dist legacy/pkg/usr legacy/pkg/etc legacy/pkg/lib
+	rm -rf dist legacy/pkg/usr legacy/pkg/etc legacy/pkg/lib essentials/pkg/usr essentials/pkg/etc
 
 install: all
 	install -d $(DESTDIR)/usr/bin
@@ -63,4 +63,15 @@ deb-legacy: argon-1v5-oled-legacy
 	dpkg-deb --build --root-owner-group legacy/pkg dist/argon-1v5-oled-legacy_1.0.0_arm64.deb
 	cd dist && sha256sum *.deb > SHA256SUMS
 
-.PHONY: all clean install deb deb-legacy
+deb-essentials:
+	mkdir -p dist
+	mkdir -p essentials/pkg/usr/bin essentials/pkg/etc/sysctl.d essentials/pkg/etc/udev/rules.d
+	cp essentials/argon-v5-essentials essentials/pkg/usr/bin/
+	cp essentials/90-argon-v5-perf.conf essentials/pkg/etc/sysctl.d/
+	cp essentials/60-argon-v5-perf.rules essentials/pkg/etc/udev/rules.d/
+	chmod 755 essentials/pkg/usr/bin/* essentials/pkg/DEBIAN/postinst essentials/pkg/DEBIAN/postrm
+	chmod 644 essentials/pkg/etc/sysctl.d/* essentials/pkg/etc/udev/rules.d/*
+	dpkg-deb --build --root-owner-group essentials/pkg dist/argon-one-v5-essentials_1.0.0_arm64.deb
+	cd dist && sha256sum *.deb > SHA256SUMS
+
+.PHONY: all clean install deb deb-legacy deb-essentials

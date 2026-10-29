@@ -1,0 +1,9 @@
+#!/bin/bash
+set -e
+
+if [ "$1" = "purge" ]; then
+    rm -f /etc/sysctl.d/90-argon-v5-perf.conf
+    rm -f /etc/udev/rules.d/60-argon-v5-perf.rules
+fi
+
+exit 0

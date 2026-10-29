@@ -1,20 +1,27 @@
-# Argon ONE V5 OLED
+# Argon ONE V5 OLED & Case Essentials
 
-[![Legacy Edition: v1.0.0 Stable](https://img.shields.io/badge/Legacy%20Edition-v1.0.0%20Stable-brightgreen?style=flat-square)](#-1-argon-1v5-oled-legacy-stabil--empfohlen)
+[![Legacy OLED: v1.0.0 Stable](https://img.shields.io/badge/Legacy%20OLED-v1.0.0%20Stable-brightgreen?style=flat-square)](#-1-argon-1v5-oled-legacy-stabil--reiner-oled-treiber--tools)
+[![Case Essentials: v1.0.0](https://img.shields.io/badge/Case%20Essentials-v1.0.0%20Stable-00b4d8?style=flat-square)](#-2-argon-one-v5-essentials-allgemeine-geh%C3%A4use---performance-einrichtung)
 [![Platform: Raspberry Pi 5](https://img.shields.io/badge/Platform-Raspberry%20Pi%205%20(arm64)-blue?style=flat-square)](https://www.raspberrypi.com/)
-[![Display: SSD1306 128x64 I2C](https://img.shields.io/badge/Display-SSD1306%20128%C3%9764%20I2C-00e5ff?style=flat-square)](https://www.argon40.com/)
-[![Next-Gen Suite: v1.1.0-alpha](https://img.shields.io/badge/Next--Gen%20Suite-v1.1.0--alpha%20WIP-orange?style=flat-square)](#-2-argon-v5-oled-experimentelle-next-gen-suite--wip)
+[![Next-Gen Suite: v1.1.0-alpha](https://img.shields.io/badge/Next--Gen%20Suite-v1.1.0--alpha%20WIP-orange?style=flat-square)](#-3-argon-v5-oled-experimentelle-next-gen-suite--wip)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green?style=flat-square)](LICENSE)
 
-Nativer, extrem ressourcenschonender **C-Treiber & Display-Daemon** für das integrierte **128×64 I2C OLED-Display** und den **Hardware-Power-Button** des **Argon ONE V5 Gehäuses** am Raspberry Pi 5.
+Modulare, extrem ressourcenschonende **C-Treiber, OLED-Tools und Gehäuse-Optimierungen** für das **Argon ONE V5 Gehäuse** am Raspberry Pi 5.  
+Da das Argon ONE V5 sowohl **mit** als auch **ohne** OLED-Display-Modul betrieben werden kann, sind **OLED-Treiber** und **allgemeine Gehäuse-Konfiguration** sauber in eigene Pakete getrennt:
+
+| Paket | Zweck |
+| :--- | :--- |
+| **[`argon-1v5-oled-legacy_1.0.0_arm64.deb`](#-1-argon-1v5-oled-legacy-stabil--reiner-oled-treiber--tools)** | **Reiner OLED-Treiber & OLED-Tools (Stabil):** 1:1 Nachbildung aller originalen Argon-OLED-Kacheln in C mit **1s-Live-Refresh**, Button-Steuerung und `argonone-oledconfig`. Enthält ausschließlich die für den OLED-Betrieb nötigen Einstellungen (`i2c_arm=on`, `i2c-dev`). |
+| **[`argon-one-v5-essentials_1.0.0_arm64.deb`](#-2-argon-one-v5-essentials-allgemeine-gehäuse---performance-einrichtung)** | **Allgemeine Gehäuse- & Performance-Einrichtung (Mit & ohne OLED nutzbar):** Aktiviert Front-USB-2.0 (`dwc2`), `uart0`, M.2 NVMe mit PCIe Gen 3, sichere 2800-MHz-CPU-Taktrate, 4-Stufen-PWM-Lüfterkurve sowie CPU-Governor-, RAM- und NVMe-Queue-Optimierungen. |
+| **[`argon-v5-oled_1.1.0-alpha_arm64.deb`](#-3-argon-v5-oled-experimentelle-next-gen-suite--wip)** | **Experimentelle Next-Gen OLED Suite (Alpha / WIP):** Neues Dashboard mit Desktop Control Center, visuellem Kachel-Designer (`argon-card-builder`) und handoptimierter 1-Bit Terminus-Bold-Schrift. |
 
 ---
 
-## 🚀 1. `argon-1v5-oled-legacy` (Stabil / Empfohlen für den Alltag)
+## 🚀 1. `argon-1v5-oled-legacy` (Stabil — Reiner OLED-Treiber & Tools)
 
 Der originale Python-Dienst von Argon40 (`argononed.py` + `argononeoled.py`) benötigt dauerhaft Python-Hintergrundprozesse, schaltet das Display bei jedem Seitenwechsel kurz aus und ein (Flackern) und aktualisiert die Werte auf der aktuellen Seite nur einmal pro Minute.
 
-**`argon-1v5-oled-legacy`** bildet **alle originalen Argon ONE V5 Kacheln und Funktionen 1:1 in reinem C (~70 KB)** nach – erweitert um eine schnelle, flackerfreie **1-Sekunden-Echtzeit-Aktualisierung**:
+**`argon-1v5-oled-legacy`** konzentriert sich rein auf das **OLED-Display und die zugehörigen Werkzeuge** und bildet alle originalen Argon ONE V5 Kacheln 1:1 in reinem C (~70 KB) nach:
 
 * **100 % Original-Kacheln & Grafiken:** Alle originalen Argon ONE V5 Screens (`clock`, `cpu`, `storage`, `raid`, `ram`, `temp`, `ip`, `logo1v5`) und Schriften (`6×8`, `8×16`) sind direkt in die C-Binary einkompiliert.
 * **Flackerfreies 1-Sekunden-Live-Update:** CPU-Last pro Kern, Temperatur, RAM und Uhrzeit aktualisieren sich jede Sekunde live (`refreshinterval=1`), ohne dass das Display beim Seitenwechsel blinkt.
@@ -23,27 +30,16 @@ Der originale Python-Dienst von Argon40 (`argononed.py` + `argononeoled.py`) ben
   * **Kurzer Druck:** Nächste OLED-Kachel bzw. Aufwecken aus dem Bildschirmschoner
   * **Doppelklick:** Sauberer System-Reboot (`systemctl reboot`)
   * **3 Sekunden Halten:** Sauberer Shutdown (`systemctl poweroff`)
-* **Sofort einsatzbereit nach einer frischen OS-Neuinstallation (100 % Standalone All-in-One Setup):**
-  * Benötigt **weder** das originale `argon1v5.sh`-Skript **noch** manuelles `raspi-config`.
-  * **OLED-Sofortstart:** Aktiviert bei der Paketinstallation automatisch `dtparam=i2c_arm=on` und lädt `i2c-dev` sofort zur Laufzeit (**das Display springt direkt bei der Installation an – ohne Neustart**).
-  * **Komplette Gehäuse- & Hardware-Einrichtung (`/boot/firmware/config.txt`):**
-    * Front-USB-2.0-Anschlüsse (`dtoverlay=dwc2,dr_mode=host`) & volles USB-Strombudget (`usb_max_current_enable=1`)
-    * Shutdown-Powercut-Erkennung (`dtparam=uart0=on` + Systemd-Shutdown-Hook)
-    * M.2 NVMe-Slot & volle PCIe Gen 3 Geschwindigkeit (`dtparam=nvme`, `dtparam=pciex1_gen=3`)
-    * Sichere CPU-Boost-Konfiguration (`arm_freq=2800`, GPU `v3d_freq` bleibt auf Standard; bereits vorhandene eigene Taktraten werden nicht überschrieben)
-    * Straffe, leise 4-Stufen-PWM-Lüfterkurve direkt über den Kernel-Device-Tree (40 °C / 50 °C / 60 °C / 70 °C, 0 % CPU-Last)
-  * **Sichere System- & I/O-Performance-Optimierungen:**
-    * **CPU-Governor-Tuning (`ondemand`):** Schnellere Taktreaktion bei Lastspitzen (`up_threshold=50`, `sampling_down_factor=2`, `io_is_busy=1`) bei kühlem 1,5-GHz-Leerlauf
-    * **RAM- & Cache-Optimierung (`/etc/sysctl.d/90-argon-v5-perf.conf`):** `vm.swappiness=10` und `vm.vfs_cache_pressure=50` zum Schonen von NVMe/SD-Karte
-    * **NVMe Multiqueue & PCIe-Latenz (`/etc/udev/rules.d/60-argon-v5-perf.rules`):** Direkter `none`-Scheduler, `read_ahead_kb=512`, `rq_affinity=2` und Schutz vor PCIe-ASPM-Latenzen
+* **Reine OLED-Einrichtung ohne Nebeneffekte:**
+  * Aktiviert bei der Paketinstallation lediglich den für das Display nötigen I2C-Bus (`dtparam=i2c_arm=on`) und lädt `i2c-dev` sofort zur Laufzeit (**das Display springt direkt bei der Installation an – ohne Neustart**).
 
-### 📦 Schnellinstallation (Legacy Edition)
+### 📦 Installation (Legacy OLED Edition)
 ```bash
 wget https://github.com/GamingTux/argon-one-v5-oled/releases/download/v1.0.0-legacy/argon-1v5-oled-legacy_1.0.0_arm64.deb
 sudo apt install ./argon-1v5-oled-legacy_1.0.0_arm64.deb
 ```
 
-### ⚙️ Konfiguration (Legacy Edition)
+### ⚙️ OLED-Konfiguration
 Per interaktivem Menü im Terminal:
 ```bash
 sudo argonone-oledconfig
@@ -59,7 +55,33 @@ screenlist="clock cpu storage ram temp ip"
 
 ---
 
-## 🧪 2. `argon-v5-oled` (Experimentelle Next-Gen Suite / WIP)
+## ⚡ 2. `argon-one-v5-essentials` (Allgemeine Gehäuse- & Performance-Einrichtung)
+
+Dieses separate Paket richtet das **Argon ONE V5 Gehäuse selbst** optimal ein – völlig unabhängig davon, ob ein OLED-Modul verbaut ist oder nicht:
+
+* **Gehäuse-Hardware in `/boot/firmware/config.txt`** *(überschreibt keine bereits vorhandenen eigenen Werte)*:
+  * **Front-USB-2.0-Anschlüsse & volles USB-Strombudget:** `dtoverlay=dwc2,dr_mode=host` & `usb_max_current_enable=1`
+  * **Shutdown-Powercut-Erkennung:** `dtparam=uart0=on`
+  * **M.2 NVMe-Slot & volle PCIe Gen 3 Geschwindigkeit:** `dtparam=nvme` & `dtparam=pciex1_gen=3` (~850–900 MB/s)
+  * **Sicherer CPU-Boost auf 2800 MHz:** `arm_freq=2800` (sofern noch kein eigenes `arm_freq=` gesetzt ist; `v3d_freq` bleibt unangetastet auf Standard)
+  * **Straffe, leise 4-Stufen-PWM-Lüfterkurve:** `40 °C -> 100`, `50 °C -> 150`, `60 °C -> 200`, `70 °C -> 250` (direkt über den Kernel-Device-Tree, 0 % CPU-Last)
+* **Sichere System- & I/O-Performance-Optimierungen:**
+  * **CPU-Governor-Tuning (`ondemand`):** Schnellere Taktreaktion bei Lastspitzen (`up_threshold=50`, `sampling_down_factor=2`, `io_is_busy=1`) bei kühlem 1,5-GHz-Leerlauf
+  * **RAM- & Cache-Optimierung (`/etc/sysctl.d/90-argon-v5-perf.conf`):** `vm.swappiness=10` und `vm.vfs_cache_pressure=50`
+  * **NVMe Multiqueue & PCIe-Latenz (`/etc/udev/rules.d/60-argon-v5-perf.rules`):** Direkter `none`-Scheduler, `read_ahead_kb=512`, `rq_affinity=2` und Schutz vor PCIe-ASPM-Latenzen
+
+### 📦 Installation & Status-Check (Case Essentials)
+```bash
+wget https://github.com/GamingTux/argon-one-v5-oled/releases/download/v1.0.0-legacy/argon-one-v5-essentials_1.0.0_arm64.deb
+sudo apt install ./argon-one-v5-essentials_1.0.0_arm64.deb
+
+# Status aller Gehäuse- und Performance-Einstellungen prüfen:
+argon-v5-essentials --status
+```
+
+---
+
+## 🧪 3. `argon-v5-oled` (Experimentelle Next-Gen Suite / WIP)
 
 > [!WARNING]
 > **Experimenteller Alpha-Status:** Neben der stabilen Legacy-Version entsteht in diesem Projekt eine komplett neue Dashboard-Suite mit eigenem Kachel-Editor. Diese Edition befindet sich in aktiver Entwicklung (Alpha / Work in Progress).
@@ -88,16 +110,14 @@ wget https://github.com/GamingTux/argon-one-v5-oled/releases/download/v1.1.0-alp
 sudo apt install ./argon-v5-oled_1.1.0-alpha_arm64.deb
 ```
 
-> [!NOTE]
-> Beide Pakete erkennen sich gegenseitig (sowie den originalen `argononed.service`) und deaktivieren bei der Installation automatisch den jeweils anderen Dienst, sodass problemlos zwischen **Legacy Edition** und **Next-Gen Suite** gewechselt werden kann.
-
 ---
 
 ## 📂 Projektstruktur & Selbst-Kompilieren
 
 ```text
 argon-v5-oled/
-├── legacy/               (Stabiler Legacy C-Daemon, eingebettete Original-Bitmaps, argonone-oledconfig)
+├── legacy/               (Stabiler Legacy OLED C-Daemon, Original-Bitmaps, argonone-oledconfig)
+├── essentials/           (Separates Case- & Performance-Paket argon-one-v5-essentials)
 ├── src/                  (Experimenteller Next-Gen C-Daemon & CLI mit Terminus Bold Fonts)
 ├── oled_engine.py        (Pixel-Engine mit Terminus Bold für den visuellen Kachel-Designer)
 ├── argon_card_builder.py (Python/Tkinter: Visueller Kachel-Designer & Screen Studio)
@@ -111,9 +131,10 @@ argon-v5-oled/
 sudo apt update
 sudo apt install -y build-essential libgpiod-dev libgpiod3 i2c-tools python3 python3-tk python3-pil
 
-make              # Baut alle C-Binaries (argon-1v5-oled-legacy, argon-v5-oled, argon-oled)
-make deb-legacy   # Baut dist/argon-1v5-oled-legacy_1.0.0_arm64.deb
-make deb          # Baut dist/argon-v5-oled_1.1.0-alpha_arm64.deb
+make                # Baut alle C-Binaries
+make deb-legacy     # Baut dist/argon-1v5-oled-legacy_1.0.0_arm64.deb
+make deb-essentials # Baut dist/argon-one-v5-essentials_1.0.0_arm64.deb
+make deb            # Baut dist/argon-v5-oled_1.1.0-alpha_arm64.deb
 ```
 
 ---

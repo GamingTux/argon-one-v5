@@ -7,56 +7,22 @@ else
     CONFIG="/boot/config.txt"
 fi
 
+# 1. Enable I2C in config.txt (required for the OLED display at 0x3C)
 if [ -f "$CONFIG" ]; then
     if grep -q "^#dtparam=i2c_arm=on" "$CONFIG"; then
         sed -i 's/^#dtparam=i2c_arm=on/dtparam=i2c_arm=on/' "$CONFIG"
     elif ! grep -q "^dtparam=i2c_arm=on" "$CONFIG"; then
         echo "dtparam=i2c_arm=on" >> "$CONFIG"
     fi
-    if ! grep -q "^dtoverlay=dwc2,dr_mode=host" "$CONFIG"; then
-        echo "dtoverlay=dwc2,dr_mode=host" >> "$CONFIG"
-    fi
-    if ! grep -q "^usb_max_current_enable=1" "$CONFIG"; then
-        echo "usb_max_current_enable=1" >> "$CONFIG"
-    fi
-    if ! grep -q "^dtparam=uart0=on" "$CONFIG"; then
-        echo "dtparam=uart0=on" >> "$CONFIG"
-    fi
-    if ! grep -q "^dtparam=nvme" "$CONFIG"; then
-        echo "dtparam=nvme" >> "$CONFIG"
-    fi
-    if ! grep -q "^dtparam=pciex1_gen=3" "$CONFIG"; then
-        echo "dtparam=pciex1_gen=3" >> "$CONFIG"
-    fi
-    if ! grep -q "^arm_freq=" "$CONFIG"; then
-        cat << 'EOF' >> "$CONFIG"
-
-# Argon ONE V5 Safe CPU Boost (2.8 GHz, V3D standard)
-arm_freq=2800
-EOF
-    fi
-    if ! grep -q "fan_temp0=" "$CONFIG"; then
-        cat << 'EOF' >> "$CONFIG"
-
-# Argon ONE V5 Optimized Pi 5 Fan Curve
-dtparam=fan_temp0=40000
-dtparam=fan_temp0_speed=100
-dtparam=fan_temp0_hyst=5000
-dtparam=fan_temp1=50000
-dtparam=fan_temp1_speed=150
-dtparam=fan_temp1_hyst=5000
-dtparam=fan_temp2=60000
-dtparam=fan_temp2_speed=200
-dtparam=fan_temp2_hyst=5000
-dtparam=fan_temp3=70000
-dtparam=fan_temp3_speed=250
-dtparam=fan_temp3_hyst=5000
-EOF
-    fi
 fi
 
+# 2. Ensure i2c-dev kernel module is loaded on boot and immediately at runtime
 mkdir -p /etc/modules-load.d
 echo "i2c-dev" > /etc/modules-load.d/argon-i2c.conf
+if [ -f /etc/modules ] && ! grep -q "^i2c-dev" /etc/modules; then
+    echo "i2c-dev" >> /etc/modules
+fi
+
 if command -v raspi-config >/dev/null 2>&1; then
     raspi-config nonint do_i2c 0 2>/dev/null || true
 fi
@@ -67,41 +33,14 @@ modprobe i2c_bcm2835 2>/dev/null || true
 modprobe i2c_designware_platform 2>/dev/null || true
 modprobe i2c-dev 2>/dev/null || true
 
-mkdir -p /etc/sysctl.d
-cat << 'EOF' > /etc/sysctl.d/90-argon-v5-perf.conf
-# Argon ONE V5 Safe Memory & Cache Optimization
-vm.swappiness = 10
-vm.vfs_cache_pressure = 50
-EOF
-sysctl --system >/dev/null 2>&1 || true
-
-mkdir -p /etc/udev/rules.d
-cat << 'EOF' > /etc/udev/rules.d/60-argon-v5-perf.rules
-# NVMe I/O Queue & Read-Ahead Optimization
-ACTION=="add|change", KERNEL=="nvme[0-9]*n[0-9]*", ATTR{queue/scheduler}="none", ATTR{queue/read_ahead_kb}="512", ATTR{queue/rq_affinity}="2"
-# Prevent PCIe Gen3 ASPM sleep latency spikes
-ACTION=="add", SUBSYSTEM=="pci", ATTR{power/control}="on"
-EOF
-udevadm control --reload-rules 2>/dev/null || true
-udevadm trigger --subsystem-match=block --subsystem-match=pci 2>/dev/null || true
-
-for f in /sys/devices/system/cpu/cpufreq/ondemand/up_threshold; do
-    [ -w "$f" ] && echo 50 > "$f" 2>/dev/null || true
-done
-for f in /sys/devices/system/cpu/cpufreq/ondemand/sampling_down_factor; do
-    [ -w "$f" ] && echo 2 > "$f" 2>/dev/null || true
-done
-for f in /sys/devices/system/cpu/cpufreq/ondemand/io_is_busy; do
-    [ -w "$f" ] && echo 1 > "$f" 2>/dev/null || true
-done
-
-# Run initial hardware & sensor discovery
+# 3. Run initial hardware & sensor discovery
 mkdir -p /etc/argon-v5-oled
 if [ -x /usr/bin/argon-hw-discover ]; then
     echo "Scanning hardware sensors on Raspberry Pi..."
     /usr/bin/argon-hw-discover --json > /etc/argon-v5-oled/sensors.json 2>/dev/null || true
 fi
 
+# 4. Stop conflicting OLED services
 for svc in argon-1v5-oled-legacy.service argononed.service; do
     if systemctl is-active --quiet "$svc" 2>/dev/null; then
         systemctl stop "$svc" || true
@@ -115,5 +54,5 @@ systemctl daemon-reload
 systemctl enable argon-v5-oled.service
 systemctl restart argon-v5-oled.service || true
 
-echo "argon-v5-oled service and Argon ONE V5 case optimizations enabled successfully."
+echo "argon-v5-oled service enabled and started successfully."
 exit 0

@@ -1,0 +1,129 @@
+#!/bin/bash
+#
+# Argon ONE V5 Case & Performance Essentials
+# Works on all Argon ONE V5 cases (with or without OLED module)
+#
+
+set -e
+
+if [ -e /boot/firmware/config.txt ]; then
+    CONFIG="/boot/firmware/config.txt"
+else
+    CONFIG="/boot/config.txt"
+fi
+
+apply_essentials() {
+    if [ "$(id -u)" -ne 0 ]; then
+        echo "Error: Please run as root (sudo argon-v5-essentials --apply)"
+        exit 1
+    fi
+
+    if [ -f "$CONFIG" ]; then
+        # 1. Front USB 2.0 ports (dwc2 host mode) & USB max current
+        if ! grep -q "^dtoverlay=dwc2,dr_mode=host" "$CONFIG"; then
+            echo "dtoverlay=dwc2,dr_mode=host" >> "$CONFIG"
+        fi
+        if ! grep -q "^usb_max_current_enable=1" "$CONFIG"; then
+            echo "usb_max_current_enable=1" >> "$CONFIG"
+        fi
+
+        # 2. UART0 for Argon ONE V5 MCU shutdown / power-cut detection
+        if ! grep -q "^dtparam=uart0=on" "$CONFIG"; then
+            echo "dtparam=uart0=on" >> "$CONFIG"
+        fi
+
+        # 3. M.2 NVMe slot & PCIe Gen 3 speed
+        if ! grep -q "^dtparam=nvme" "$CONFIG"; then
+            echo "dtparam=nvme" >> "$CONFIG"
+        fi
+        if ! grep -q "^dtparam=pciex1_gen=3" "$CONFIG"; then
+            echo "dtparam=pciex1_gen=3" >> "$CONFIG"
+        fi
+
+        # 4. Safe CPU Boost (2800 MHz, V3D left at standard) if no custom arm_freq is set
+        if ! grep -q "^arm_freq=" "$CONFIG"; then
+            cat << 'EOF' >> "$CONFIG"
+
+# Argon ONE V5 Safe CPU Boost (2.8 GHz, V3D standard)
+arm_freq=2800
+EOF
+        fi
+
+        # 5. Responsive 4-Stage Pi 5 PWM Fan Curve if no custom fan_temp0 is set
+        if ! grep -q "fan_temp0=" "$CONFIG"; then
+            cat << 'EOF' >> "$CONFIG"
+
+# Argon ONE V5 Optimized Pi 5 Fan Curve
+dtparam=fan_temp0=40000
+dtparam=fan_temp0_speed=100
+dtparam=fan_temp0_hyst=5000
+dtparam=fan_temp1=50000
+dtparam=fan_temp1_speed=150
+dtparam=fan_temp1_hyst=5000
+dtparam=fan_temp2=60000
+dtparam=fan_temp2_speed=200
+dtparam=fan_temp2_hyst=5000
+dtparam=fan_temp3=70000
+dtparam=fan_temp3_speed=250
+dtparam=fan_temp3_hyst=5000
+EOF
+        fi
+    fi
+
+    # 6. Apply runtime sysctl, udev & CPU governor optimizations
+    sysctl --system >/dev/null 2>&1 || true
+    udevadm control --reload-rules 2>/dev/null || true
+    udevadm trigger --subsystem-match=block --subsystem-match=pci 2>/dev/null || true
+
+    for f in /sys/devices/system/cpu/cpufreq/ondemand/up_threshold; do
+        [ -w "$f" ] && echo 50 > "$f" 2>/dev/null || true
+    done
+    for f in /sys/devices/system/cpu/cpufreq/ondemand/sampling_down_factor; do
+        [ -w "$f" ] && echo 2 > "$f" 2>/dev/null || true
+    done
+    for f in /sys/devices/system/cpu/cpufreq/ondemand/io_is_busy; do
+        [ -w "$f" ] && echo 1 > "$f" 2>/dev/null || true
+    done
+
+    echo "Argon ONE V5 Case & Performance Essentials applied successfully."
+}
+
+show_status() {
+    echo "========================================================"
+    echo " Argon ONE V5 Case & Performance Essentials — Status"
+    echo "========================================================"
+    echo "Config File : $CONFIG"
+    if [ -f "$CONFIG" ]; then
+        echo -n "Front USB 2.0 (dwc2)   : "; grep -q "^dtoverlay=dwc2,dr_mode=host" "$CONFIG" && echo "ENABLED" || echo "NOT SET"
+        echo -n "Max USB Current        : "; grep -q "^usb_max_current_enable=1" "$CONFIG" && echo "ENABLED" || echo "NOT SET"
+        echo -n "UART0 Power-Cut Detect : "; grep -q "^dtparam=uart0=on" "$CONFIG" && echo "ENABLED" || echo "NOT SET"
+        echo -n "NVMe + PCIe Gen 3      : "; grep -q "^dtparam=pciex1_gen=3" "$CONFIG" && echo "ENABLED" || echo "NOT SET"
+        cur_arm=$(grep "^arm_freq=" "$CONFIG" | tail -n 1 | cut -d= -f2)
+        echo "Configured arm_freq    : ${cur_arm:-Standard (2400)} MHz"
+        echo -n "Pi 5 PWM Fan Curve     : "; grep -q "fan_temp0=" "$CONFIG" && echo "CONFIGURED (4-Stage)" || echo "Default OS Curve"
+    fi
+    echo "--------------------------------------------------------"
+    up_thr=$(cat /sys/devices/system/cpu/cpufreq/ondemand/up_threshold 2>/dev/null || echo "N/A")
+    down_fac=$(cat /sys/devices/system/cpu/cpufreq/ondemand/sampling_down_factor 2>/dev/null || echo "N/A")
+    echo "CPU Governor Tuning    : up_threshold=$up_thr, sampling_down_factor=$down_fac"
+    if [ -e /sys/block/nvme0n1/queue/scheduler ]; then
+        sched=$(cat /sys/block/nvme0n1/queue/scheduler 2>/dev/null)
+        ra=$(cat /sys/block/nvme0n1/queue/read_ahead_kb 2>/dev/null)
+        echo "NVMe Queue (nvme0n1)   : scheduler=$sched, read_ahead=${ra}KB"
+    fi
+    echo "Sysctl Memory Tuning   : swappiness=$(sysctl -n vm.swappiness 2>/dev/null), vfs_cache_pressure=$(sysctl -n vm.vfs_cache_pressure 2>/dev/null)"
+    echo "========================================================"
+}
+
+case "${1:-}" in
+    --apply|apply)
+        apply_essentials
+        ;;
+    --status|status|"")
+        show_status
+        ;;
+    *)
+        echo "Usage: argon-v5-essentials [--status | --apply]"
+        exit 1
+        ;;
+esac

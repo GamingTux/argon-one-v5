@@ -1,0 +1,8 @@
+#!/bin/bash
+set -e
+
+if [ -x /usr/bin/argon-v5-essentials ]; then
+    /usr/bin/argon-v5-essentials --apply
+fi
+
+exit 0

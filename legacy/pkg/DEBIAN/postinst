@@ -7,64 +7,16 @@ else
     CONFIG="/boot/config.txt"
 fi
 
+# 1. Enable I2C in config.txt (required for the OLED display at 0x3C)
 if [ -f "$CONFIG" ]; then
-    # 1. Enable I2C in config.txt
     if grep -q "^#dtparam=i2c_arm=on" "$CONFIG"; then
         sed -i 's/^#dtparam=i2c_arm=on/dtparam=i2c_arm=on/' "$CONFIG"
     elif ! grep -q "^dtparam=i2c_arm=on" "$CONFIG"; then
         echo "dtparam=i2c_arm=on" >> "$CONFIG"
     fi
-
-    # 2. Argon ONE V5 Case Hardware: Front USB 2.0 (dwc2), Max USB Current & UART0 Shutdown Detection
-    if ! grep -q "^dtoverlay=dwc2,dr_mode=host" "$CONFIG"; then
-        echo "dtoverlay=dwc2,dr_mode=host" >> "$CONFIG"
-    fi
-    if ! grep -q "^usb_max_current_enable=1" "$CONFIG"; then
-        echo "usb_max_current_enable=1" >> "$CONFIG"
-    fi
-    if ! grep -q "^dtparam=uart0=on" "$CONFIG"; then
-        echo "dtparam=uart0=on" >> "$CONFIG"
-    fi
-
-    # 3. Argon ONE V5 M.2 NVMe Slot & PCIe Gen 3 Speed
-    if ! grep -q "^dtparam=nvme" "$CONFIG"; then
-        echo "dtparam=nvme" >> "$CONFIG"
-    fi
-    if ! grep -q "^dtparam=pciex1_gen=3" "$CONFIG"; then
-        echo "dtparam=pciex1_gen=3" >> "$CONFIG"
-    fi
-
-    # 4. Safe CPU Boost (2800 MHz, V3D left at standard) if no custom arm_freq is set
-    if ! grep -q "^arm_freq=" "$CONFIG"; then
-        cat << 'EOF' >> "$CONFIG"
-
-# Argon ONE V5 Safe CPU Boost (2.8 GHz, V3D standard)
-arm_freq=2800
-EOF
-    fi
-
-    # 5. Responsive 4-Stage Pi 5 PWM Fan Curve if no custom fan_temp0 is set
-    if ! grep -q "fan_temp0=" "$CONFIG"; then
-        cat << 'EOF' >> "$CONFIG"
-
-# Argon ONE V5 Optimized Pi 5 Fan Curve
-dtparam=fan_temp0=40000
-dtparam=fan_temp0_speed=100
-dtparam=fan_temp0_hyst=5000
-dtparam=fan_temp1=50000
-dtparam=fan_temp1_speed=150
-dtparam=fan_temp1_hyst=5000
-dtparam=fan_temp2=60000
-dtparam=fan_temp2_speed=200
-dtparam=fan_temp2_hyst=5000
-dtparam=fan_temp3=70000
-dtparam=fan_temp3_speed=250
-dtparam=fan_temp3_hyst=5000
-EOF
-    fi
 fi
 
-# 6. Ensure i2c-dev kernel module is loaded on boot and immediately at runtime (no reboot needed for OLED!)
+# 2. Ensure i2c-dev kernel module is loaded on boot and immediately at runtime (no reboot needed for OLED!)
 mkdir -p /etc/modules-load.d
 echo "i2c-dev" > /etc/modules-load.d/argon-i2c.conf
 if [ -f /etc/modules ] && ! grep -q "^i2c-dev" /etc/modules; then
@@ -81,39 +33,7 @@ modprobe i2c_bcm2835 2>/dev/null || true
 modprobe i2c_designware_platform 2>/dev/null || true
 modprobe i2c-dev 2>/dev/null || true
 
-# 7. Safe System Performance Optimizations:
-#    (a) RAM / Swap / VFS Cache Tuning
-mkdir -p /etc/sysctl.d
-cat << 'EOF' > /etc/sysctl.d/90-argon-v5-perf.conf
-# Argon ONE V5 Safe Memory & Cache Optimization
-vm.swappiness = 10
-vm.vfs_cache_pressure = 50
-EOF
-sysctl --system >/dev/null 2>&1 || true
-
-#    (b) NVMe Direct Multiqueue ('none'), Read-Ahead & PCIe Latency + Fast CPU Governor Rules
-mkdir -p /etc/udev/rules.d
-cat << 'EOF' > /etc/udev/rules.d/60-argon-v5-perf.rules
-# NVMe I/O Queue & Read-Ahead Optimization
-ACTION=="add|change", KERNEL=="nvme[0-9]*n[0-9]*", ATTR{queue/scheduler}="none", ATTR{queue/read_ahead_kb}="512", ATTR{queue/rq_affinity}="2"
-# Prevent PCIe Gen3 ASPM sleep latency spikes
-ACTION=="add", SUBSYSTEM=="pci", ATTR{power/control}="on"
-EOF
-udevadm control --reload-rules 2>/dev/null || true
-udevadm trigger --subsystem-match=block --subsystem-match=pci 2>/dev/null || true
-
-#    (c) Immediate CPU Governor Tuning (fast ramp-up on load, cool 1.5 GHz idle)
-for f in /sys/devices/system/cpu/cpufreq/ondemand/up_threshold; do
-    [ -w "$f" ] && echo 50 > "$f" 2>/dev/null || true
-done
-for f in /sys/devices/system/cpu/cpufreq/ondemand/sampling_down_factor; do
-    [ -w "$f" ] && echo 2 > "$f" 2>/dev/null || true
-done
-for f in /sys/devices/system/cpu/cpufreq/ondemand/io_is_busy; do
-    [ -w "$f" ] && echo 1 > "$f" 2>/dev/null || true
-done
-
-# 8. Install default OLED config if not present
+# 3. Install default OLED config if not present
 if [ ! -f /etc/argononeoled.conf ]; then
     cat << 'EOF' > /etc/argononeoled.conf
 #
@@ -127,7 +47,7 @@ screenlist="clock cpu storage ram temp ip"
 EOF
 fi
 
-# 9. Install original .bin assets to /etc/argon/oled if not present
+# 4. Install original .bin assets to /etc/argon/oled if not present
 mkdir -p /etc/argon/oled
 if [ -d /usr/share/argon-1v5-oled-legacy/oled ]; then
     for f in /usr/share/argon-1v5-oled-legacy/oled/*.bin; do
@@ -138,7 +58,7 @@ if [ -d /usr/share/argon-1v5-oled-legacy/oled ]; then
     done
 fi
 
-# 10. Stop conflicting OLED services so only one daemon accesses I2C 0x3C and GPIO4
+# 5. Stop conflicting OLED services so only one daemon accesses I2C 0x3C and GPIO4
 for svc in argon-v5-oled.service argononed.service; do
     if systemctl is-active --quiet "$svc" 2>/dev/null; then
         systemctl stop "$svc" || true
@@ -152,5 +72,5 @@ systemctl daemon-reload
 systemctl enable argon-1v5-oled-legacy.service
 systemctl restart argon-1v5-oled-legacy.service || true
 
-echo "argon-1v5-oled-legacy service and Argon ONE V5 case optimizations enabled successfully."
+echo "argon-1v5-oled-legacy service enabled and started successfully."
 exit 0

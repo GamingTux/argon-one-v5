@@ -1,0 +1,15 @@
+Package: argon-one-v5-essentials
+Version: 1.0.0
+Section: utils
+Priority: optional
+Architecture: arm64
+Maintainer: GamingTux <240287558+GamingTux@users.noreply.github.com>
+Description: Argon ONE V5 Case & Performance Essentials (for cases with or without OLED)
+ Configures all hardware features and safe performance optimizations for the
+ Argon ONE V5 Raspberry Pi 5 case (independent of the optional OLED module):
+  - Front USB 2.0 ports (dwc2 host mode) and full USB current budget
+  - UART0 shutdown detection for clean case power-cut
+  - M.2 NVMe slot activation and PCIe Gen 3 speed
+  - Safe 2800 MHz CPU boost (V3D GPU left at standard)
+  - Responsive 4-stage kernel PWM fan curve (0% CPU overhead)
+  - Fast CPU governor ramp-up, NVMe multiqueue ('none') & RAM/cache sysctl tuning

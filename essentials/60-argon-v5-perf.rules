@@ -1,0 +1,9 @@
+# Argon ONE V5 Safe Storage, PCIe & CPU Governor Optimization
+# 1. NVMe I/O Queue & Read-Ahead Optimization
+ACTION=="add|change", KERNEL=="nvme[0-9]*n[0-9]*", ATTR{queue/scheduler}="none", ATTR{queue/read_ahead_kb}="512", ATTR{queue/rq_affinity}="2"
+
+# 2. Prevent PCIe Gen3 ASPM sleep latency spikes
+ACTION=="add", SUBSYSTEM=="pci", ATTR{power/control}="on"
+
+# 3. Fast CPU Governor Responsiveness on boot/governor change
+ACTION=="add|change", SUBSYSTEM=="cpu", KERNEL=="cpu0", RUN+="/bin/sh -c 'echo 50 > /sys/devices/system/cpu/cpufreq/ondemand/up_threshold 2>/dev/null; echo 2 > /sys/devices/system/cpu/cpufreq/ondemand/sampling_down_factor 2>/dev/null; echo 1 > /sys/devices/system/cpu/cpufreq/ondemand/io_is_busy 2>/dev/null || true'"
