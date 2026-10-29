@@ -91,7 +91,7 @@ typedef struct {
 } CoreSnap;
 
 #define MAX_CORES 16
-#define CPU_RING_SIZE 10  // 10 frames @ 30Hz = ~333ms sliding window (~33 kernel ticks)
+#define CPU_RING_SIZE 4   // 4 samples @ 4Hz (250ms) = 1000ms smooth window
 static CoreSnap g_cpu_ring[CPU_RING_SIZE][MAX_CORES];
 static int g_cpu_ring_head = 0;
 static int g_cpu_ring_count = 0;
@@ -1295,24 +1295,21 @@ int main(int argc, char **argv) {
         }
 
         if (!screensaver_mode) {
-            // Sample CPU (30 Hz sliding ring-buffer) & temperature every frame (30x per second)
-            update_cpu_usage();
-            float live_temp = get_cpu_temp();
-
-            // 30 Hz instant smooth bar tracking (EMA)
-            for (int i = 0; i < MAX_CORES; i++) {
-                g_smooth_core[i] += (g_live_core[i] - g_smooth_core[i]) * 0.45f;
-            }
-            g_smooth_temp += (live_temp - g_smooth_temp) * 0.45f;
-
-            // Update readable numeric text digits 4x per second (every 250ms)
+            // Query CPU & temperature 4x per second (every 250ms)
             if (last_telemetry_ms == 0 || (frame_start_ms - last_telemetry_ms) >= 250ULL) {
+                update_cpu_usage();
+                g_cur_temp = get_cpu_temp();
                 for (int i = 0; i < MAX_CORES; i++) {
-                    g_core_usage[i] = (int)(g_smooth_core[i] + 0.5f);
+                    g_core_usage[i] = (int)(g_live_core[i] + 0.5f);
                 }
-                g_cur_temp = g_smooth_temp;
                 last_telemetry_ms = frame_start_ms;
             }
+
+            // 30 Hz fluid bar animation (glides smoothly across all 30 frames/sec)
+            for (int i = 0; i < MAX_CORES; i++) {
+                g_smooth_core[i] += (g_live_core[i] - g_smooth_core[i]) * 0.14f;
+            }
+            g_smooth_temp += (g_cur_temp - g_smooth_temp) * 0.14f;
 
             // Render active card at 30 Hz & transmit only dirty pixels over I2C
             int tries = 0;
