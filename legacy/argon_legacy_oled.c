@@ -444,7 +444,7 @@ static void oled_drawfilledrectangle(int x, int y, int wd, int ht, int mode) {
     }
 }
 
-#define MAX_TEXT_SLOTS 16
+#define MAX_TEXT_SLOTS 24
 #define TEXT_ANIM_STEPS 6
 
 typedef struct {
@@ -513,7 +513,7 @@ static void oled_writetext(const char *textdata, int x, int y, int charwd, int m
     TextSlot *slot = NULL;
     for (int i = 0; i < MAX_TEXT_SLOTS; i++) {
         if (g_text_slots[i].used && g_text_slots[i].y == y && g_text_slots[i].charwd == charwd &&
-            abs(g_text_slots[i].x - x) <= 16) {
+            abs(g_text_slots[i].x - x) <= 8) {
             slot = &g_text_slots[i];
             break;
         }
@@ -555,7 +555,11 @@ static void oled_writetext(const char *textdata, int x, int y, int charwd, int m
             old_ch = (old_idx >= 0 && (size_t)old_idx < old_len) ? old_chars[old_idx] : ' ';
         }
 
-        bool animate_char = (anim_step < TEXT_ANIM_STEPS) && (ch != old_ch);
+        bool is_digit = (ch >= '0' && ch <= '9');
+        if (old_ch < '0' || old_ch > '9') {
+            old_ch = ' ';
+        }
+        bool animate_char = is_digit && (anim_step < TEXT_ANIM_STEPS) && (ch != old_ch);
         int fontoffset_new = ((int)ch) * charwd;
         int fontoffset_old = ((int)old_ch) * charwd;
 
@@ -1047,10 +1051,12 @@ static bool render_card(const char *screen_name, int page_subidx, int *out_pages
         if (count > 4) count = 4;
         int yoffset = 0;
         for (int i = 0; i < count; i++) {
-            char line[32];
+            char lbl[16], val_str[16];
             int val = g_core_usage[i];
-            snprintf(line, sizeof(line), "cpu%d: %d%%", i, val);
-            oled_writetext(line, STD_LEFT_OFFSET, yoffset, FONT_WD_SML, 0);
+            snprintf(lbl, sizeof(lbl), "cpu%d:", i);
+            snprintf(val_str, sizeof(val_str), "%d%%", val);
+            oled_writetext(lbl, STD_LEFT_OFFSET, yoffset, FONT_WD_SML, 0);
+            oled_writetext(val_str, STD_LEFT_OFFSET + 6 * FONT_WD_SML, yoffset, FONT_WD_SML, 0);
             int bar_w = (int)(((OLED_WIDTH - STD_LEFT_OFFSET - 4) * g_smooth_core[i]) / 100.0f + 0.5f);
             oled_drawfilledrectangle(STD_LEFT_OFFSET, yoffset + 12, bar_w, 2, 0);
             yoffset += 16;
