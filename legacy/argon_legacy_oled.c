@@ -46,6 +46,7 @@ static volatile sig_atomic_t g_running = 1;
 static volatile sig_atomic_t g_oled_switch_req = 0;
 static volatile sig_atomic_t g_reboot_req = 0;
 static volatile sig_atomic_t g_shutdown_req = 0;
+static bool g_oledswitch_only = true;
 
 static int g_i2c_fd = -1;
 static bool g_oled_powered = false;
@@ -92,8 +93,11 @@ typedef struct {
 #define MAX_CORES 16
 static CoreSnap g_prev_cores[MAX_CORES];
 static int g_core_usage[MAX_CORES];
+static float g_smooth_core[MAX_CORES];
 static int g_num_cores = 0;
 static bool g_cpu_initialized = false;
+static float g_cur_temp = 40.0f;
+static float g_smooth_temp = 40.0f;
 
 // Storage item
 typedef struct {
@@ -221,8 +225,40 @@ static int oled_init_hw(void) {
     return 0;
 }
 
+static void oled_set_window(uint8_t col_start, uint8_t col_end, uint8_t page_start, uint8_t page_end) {
+    uint8_t cmd[7] = {
+        0x00,       // Control byte: command stream
+        0x21, col_start, col_end,
+        0x22, page_start, page_end
+    };
+    ssize_t w = write(g_i2c_fd, cmd, sizeof(cmd));
+    (void)w;
+}
+
+static void oled_send_data(const uint8_t *data, int len) {
+    uint8_t chunk[65];
+    chunk[0] = 0x40; // Control byte: GDDRAM data stream
+    int offset = 0;
+    while (offset < len) {
+        int n = (len - offset > 64) ? 64 : (len - offset);
+        memcpy(&chunk[1], &data[offset], n);
+        ssize_t w = write(g_i2c_fd, chunk, n + 1);
+        (void)w;
+        offset += n;
+    }
+}
+
 static void oled_flush(void) {
-    // Save shared-memory copy for preview/inspection
+    if (g_i2c_fd < 0) {
+        if (oled_init_hw() < 0) return;
+    }
+
+    // Fast path: skip both SHM write and I2C transfer if no pixel changed
+    if (g_has_flushed && memcmp(g_oled_buf, g_last_flushed, OLED_BUF_SIZE) == 0) {
+        return;
+    }
+
+    // Save shared-memory copy for preview/inspection when pixels change
     int shm_fd = open(SHM_FB_PATH, O_WRONLY | O_CREAT | O_TRUNC, 0666);
     if (shm_fd >= 0) {
         ssize_t w = write(shm_fd, g_oled_buf, OLED_BUF_SIZE);
@@ -230,31 +266,72 @@ static void oled_flush(void) {
         close(shm_fd);
     }
 
-    if (g_i2c_fd < 0) {
-        if (oled_init_hw() < 0) return;
-    }
-
-    // Skip I2C transfer if buffer is identical to last frame
-    if (g_has_flushed && memcmp(g_oled_buf, g_last_flushed, OLED_BUF_SIZE) == 0) {
+    if (!g_has_flushed) {
+        oled_set_window(0, OLED_WIDTH - 1, 0, (OLED_HEIGHT / 8) - 1);
+        oled_send_data(g_oled_buf, OLED_BUF_SIZE);
+        memcpy(g_last_flushed, g_oled_buf, OLED_BUF_SIZE);
+        g_has_flushed = true;
         return;
     }
 
-    oled_cmd(0x21); // Column address
-    oled_cmd(0);
-    oled_cmd(OLED_WIDTH - 1);
-    oled_cmd(0x22); // Page address
-    oled_cmd(0);
-    oled_cmd((OLED_HEIGHT / 8) - 1);
+    // Partial / Dirty-Region Scan across the 8 SSD1306 pages (0..7)
+    int p_min_x[8], p_max_x[8];
+    int global_min_p = 8, global_max_p = -1;
+    int global_min_x = OLED_WIDTH, global_max_x = -1;
+    int cost_spans = 0;
 
-    uint8_t chunk[65];
-    chunk[0] = 0x40; // Co=0, D/C#=1
-    for (int offset = 0; offset < OLED_BUF_SIZE; offset += 64) {
-        memcpy(&chunk[1], &g_oled_buf[offset], 64);
-        ssize_t w = write(g_i2c_fd, chunk, 65);
-        (void)w;
+    for (int p = 0; p < 8; p++) {
+        p_min_x[p] = OLED_WIDTH;
+        p_max_x[p] = -1;
+        const uint8_t *cur_row = &g_oled_buf[p * OLED_WIDTH];
+        const uint8_t *old_row = &g_last_flushed[p * OLED_WIDTH];
+        for (int x = 0; x < OLED_WIDTH; x++) {
+            if (cur_row[x] != old_row[x]) {
+                if (x < p_min_x[p]) p_min_x[p] = x;
+                if (x > p_max_x[p]) p_max_x[p] = x;
+            }
+        }
+        if (p_max_x[p] >= p_min_x[p]) {
+            if (p < global_min_p) global_min_p = p;
+            if (p > global_max_p) global_max_p = p;
+            if (p_min_x[p] < global_min_x) global_min_x = p_min_x[p];
+            if (p_max_x[p] > global_max_x) global_max_x = p_max_x[p];
+            int span_len = p_max_x[p] - p_min_x[p] + 1;
+            cost_spans += 7 + 1 + span_len;
+        }
     }
+
+    if (global_max_p < global_min_p) {
+        return;
+    }
+
+    int bbox_w = global_max_x - global_min_x + 1;
+    int bbox_p = global_max_p - global_min_p + 1;
+    int bbox_bytes = bbox_w * bbox_p;
+    int cost_bbox = 7 + bbox_bytes + ((bbox_bytes + 63) / 64);
+
+    if (cost_spans <= cost_bbox) {
+        // Transmit only the changed column span on each dirty page
+        for (int p = global_min_p; p <= global_max_p; p++) {
+            if (p_max_x[p] >= p_min_x[p]) {
+                int span_len = p_max_x[p] - p_min_x[p] + 1;
+                oled_set_window((uint8_t)p_min_x[p], (uint8_t)p_max_x[p], (uint8_t)p, (uint8_t)p);
+                oled_send_data(&g_oled_buf[p * OLED_WIDTH + p_min_x[p]], span_len);
+            }
+        }
+    } else {
+        // Transmit single 2D bounding window
+        uint8_t sub_buf[OLED_BUF_SIZE];
+        int idx = 0;
+        for (int p = global_min_p; p <= global_max_p; p++) {
+            memcpy(&sub_buf[idx], &g_oled_buf[p * OLED_WIDTH + global_min_x], bbox_w);
+            idx += bbox_w;
+        }
+        oled_set_window((uint8_t)global_min_x, (uint8_t)global_max_x, (uint8_t)global_min_p, (uint8_t)global_max_p);
+        oled_send_data(sub_buf, idx);
+    }
+
     memcpy(g_last_flushed, g_oled_buf, OLED_BUF_SIZE);
-    g_has_flushed = true;
 }
 
 // ============================================================================
@@ -792,7 +869,7 @@ static bool render_card(const char *screen_name, int page_subidx, int *out_pages
             int val = g_core_usage[i];
             snprintf(line, sizeof(line), "cpu%d: %d%%", i, val);
             oled_writetext(line, STD_LEFT_OFFSET, yoffset, FONT_WD_SML, 0);
-            int bar_w = ((OLED_WIDTH - STD_LEFT_OFFSET - 4) * val) / 100;
+            int bar_w = (int)(((OLED_WIDTH - STD_LEFT_OFFSET - 4) * g_smooth_core[i]) / 100.0f + 0.5f);
             oled_drawfilledrectangle(STD_LEFT_OFFSET, yoffset + 12, bar_w, 2, 0);
             yoffset += 16;
         }
@@ -865,7 +942,7 @@ static bool render_card(const char *screen_name, int page_subidx, int *out_pages
 
     } else if (strcmp(screen_name, "temp") == 0) {
         oled_loadbg("bgtemp");
-        float cval = get_cpu_temp();
+        float cval = g_cur_temp;
         char val_str[16];
         if (g_cfg.temp_unit == 'F') {
             float fval = 32.0f + (9.0f * cval) / 5.0f;
@@ -879,12 +956,14 @@ static bool render_card(const char *screen_name, int page_subidx, int *out_pages
         snprintf(full_str, sizeof(full_str), "%s\xA7%c", val_str, g_cfg.temp_unit);
         oled_writetextaligned(full_str, STD_LEFT_OFFSET, 24, OLED_WIDTH - STD_LEFT_OFFSET, 1, FONT_WD_REG, 0);
 
-        // Thermometer mercury bar (40C min .. 80C max, height 1..21)
+        // Calibrated to the 4 tick marks of bgtemp.bin:
+        // 20C = 1px (y=40), 40C = 7px (y=34, tick 1), 50C = 10px (y=31, tick 2),
+        // 60C = 13px (y=28, tick 3), 70C = 16px (y=25, tick 4), 85C = 21px (y=20, full)
         int maxht = 21;
-        int barht = (int)(maxht * (cval - 40.0f) / 40.0f);
+        int barht = (int)(1.0f + (g_smooth_temp - 20.0f) * 0.3f + 0.5f);
         if (barht > maxht) barht = maxht;
         else if (barht < 1) barht = 1;
-        oled_drawfilledrectangle(24, 20 + (maxht - barht), 3, barht, 2);
+        oled_drawfilledrectangle(24, 20 + (maxht - barht), 3, barht, 0);
         return true;
 
     } else if (strcmp(screen_name, "ip") == 0) {
@@ -899,7 +978,7 @@ static bool render_card(const char *screen_name, int page_subidx, int *out_pages
         return true;
 
     } else {
-        // Default: "clock"
+        // Default: "clock" with live HH:MM:SS seconds display
         oled_loadbg("bgtime");
         static const char *weekday_names[] = { "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" };
         static const char *month_names[] = {
@@ -919,9 +998,9 @@ static bool render_card(const char *screen_name, int page_subidx, int *out_pages
         oled_writetextaligned(md_str, STD_LEFT_OFFSET, 8, OLED_WIDTH - STD_LEFT_OFFSET, 1, FONT_WD_REG, 0);
         oled_writetextaligned(weekday_names[tm_now.tm_wday], STD_LEFT_OFFSET, 24, OLED_WIDTH - STD_LEFT_OFFSET, 1, FONT_WD_REG, 0);
 
-        char hm_str[16];
-        snprintf(hm_str, sizeof(hm_str), "%02d:%02d", tm_now.tm_hour, tm_now.tm_min);
-        oled_writetextaligned(hm_str, STD_LEFT_OFFSET, 40, OLED_WIDTH - STD_LEFT_OFFSET, 1, FONT_WD_REG, 0);
+        char hms_str[16];
+        snprintf(hms_str, sizeof(hms_str), "%02d:%02d:%02d", tm_now.tm_hour, tm_now.tm_min, tm_now.tm_sec);
+        oled_writetextaligned(hms_str, STD_LEFT_OFFSET, 40, OLED_WIDTH - STD_LEFT_OFFSET, 1, FONT_WD_REG, 0);
         return true;
     }
 }
@@ -942,14 +1021,14 @@ static void *button_monitor_thread(void *arg) {
     struct gpiod_line_settings *settings = gpiod_line_settings_new();
     gpiod_line_settings_set_direction(settings, GPIOD_LINE_DIRECTION_INPUT);
     gpiod_line_settings_set_edge_detection(settings, GPIOD_LINE_EDGE_BOTH);
-    gpiod_line_settings_set_bias(settings, GPIOD_LINE_BIAS_DISABLED);
+    gpiod_line_settings_set_bias(settings, GPIOD_LINE_BIAS_PULL_DOWN);
 
     struct gpiod_line_config *line_cfg = gpiod_line_config_new();
     unsigned int offsets[1] = { 4 };
     gpiod_line_config_add_line_settings(line_cfg, offsets, 1, settings);
 
     struct gpiod_request_config *req_cfg = gpiod_request_config_new();
-    gpiod_request_config_set_consumer(req_cfg, "argon-1v5-oled-legacy");
+    gpiod_request_config_set_consumer(req_cfg, "argon-one-v5-oled-legacy");
 
     struct gpiod_line_request *req = gpiod_chip_request_lines(chip, req_cfg, line_cfg);
     gpiod_request_config_free(req_cfg);
@@ -964,32 +1043,63 @@ static void *button_monitor_thread(void *arg) {
     struct gpiod_edge_event_buffer *ev_buf = gpiod_edge_event_buffer_new(16);
     int fd = gpiod_line_request_get_fd(req);
     struct pollfd pfd = { .fd = fd, .events = POLLIN };
-    uint64_t high_start_ms = 0;
+    uint64_t rise_ts_ns = 0;
+    bool handled_pulse = false;
 
     while (g_running) {
-        int ret = poll(&pfd, 1, 500);
+        int ret = poll(&pfd, 1, 250);
         if (ret > 0 && (pfd.revents & POLLIN)) {
             int n = gpiod_line_request_read_edge_events(req, ev_buf, 16);
             for (int i = 0; i < n; i++) {
                 struct gpiod_edge_event *ev = gpiod_edge_event_buffer_get_event(ev_buf, i);
                 int type = gpiod_edge_event_get_event_type(ev);
+                uint64_t ts_ns = gpiod_edge_event_get_timestamp_ns(ev);
+
                 if (type == GPIOD_EDGE_EVENT_RISING_EDGE) {
-                    high_start_ms = get_monotonic_ms();
-                } else if (type == GPIOD_EDGE_EVENT_FALLING_EDGE && high_start_ms > 0) {
-                    uint64_t pulse_ms = get_monotonic_ms() - high_start_ms;
-                    high_start_ms = 0;
-                    // Original Argon ONE MCU pulse encoding on GPIO4:
-                    // 20-30ms = double-tap reboot
-                    // 40-50ms = 3s hold shutdown
-                    // >= 60ms = OLED page switch
-                    if (pulse_ms >= 15 && pulse_ms <= 35) {
-                        g_reboot_req = 1;
-                        g_running = 0;
-                    } else if (pulse_ms >= 36 && pulse_ms <= 55) {
-                        g_shutdown_req = 1;
-                        g_running = 0;
-                    } else if (pulse_ms >= 60) {
-                        g_oled_switch_req = 1;
+                    rise_ts_ns = ts_ns;
+                    handled_pulse = false;
+
+                    // Active 10ms polling while GPIO4 is HIGH (exact match with argonpowerbutton.py)
+                    int pulsetime = 0;
+                    while (gpiod_line_request_get_value(req, 4) == GPIOD_LINE_VALUE_ACTIVE && pulsetime < 500) {
+                        usleep(10000); // 10ms
+                        pulsetime++;
+                    }
+                    if (pulsetime > 0) {
+                        handled_pulse = true;
+                        if (g_oledswitch_only) {
+                            if (pulsetime >= 1) {
+                                g_oled_switch_req = 1;
+                            }
+                        } else {
+                            if (pulsetime >= 2 && pulsetime <= 3) {
+                                g_reboot_req = 1;
+                                g_running = 0;
+                            } else if (pulsetime >= 4 && pulsetime <= 5) {
+                                g_shutdown_req = 1;
+                                g_running = 0;
+                            } else if (pulsetime >= 6) {
+                                g_oled_switch_req = 1;
+                            }
+                        }
+                    }
+                } else if (type == GPIOD_EDGE_EVENT_FALLING_EDGE && rise_ts_ns > 0 && !handled_pulse) {
+                    uint64_t pulse_ms = (ts_ns > rise_ts_ns) ? ((ts_ns - rise_ts_ns) / 1000000ULL) : 0;
+                    if (pulse_ms >= 8) {
+                        rise_ts_ns = 0;
+                        if (g_oledswitch_only) {
+                            g_oled_switch_req = 1;
+                        } else {
+                            if (pulse_ms >= 15 && pulse_ms <= 35) {
+                                g_reboot_req = 1;
+                                g_running = 0;
+                            } else if (pulse_ms >= 36 && pulse_ms <= 55) {
+                                g_shutdown_req = 1;
+                                g_running = 0;
+                            } else if (pulse_ms >= 56) {
+                                g_oled_switch_req = 1;
+                            }
+                        }
                     }
                 }
             }
@@ -1041,8 +1151,11 @@ int main(int argc, char **argv) {
             return 0;
         } else if (strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "-h") == 0) {
             printf("Usage: %s [SERVICE [OLEDSWITCH] | SHUTDOWN | --shutdown | FANOFF]\n", argv[0]);
-            printf("Argon ONE V5 Legacy OLED Daemon (Original Cards + Fast 1s Refresh)\n");
+            printf("Argon ONE V5 Legacy OLED Daemon (Original Cards + 30Hz Partial Refresh)\n");
             return 0;
+        }
+        if (argc > 2 && strcasecmp(argv[2], "OLEDSWITCH") != 0) {
+            g_oledswitch_only = false;
         }
     }
 
@@ -1053,9 +1166,14 @@ int main(int argc, char **argv) {
     init_assets();
     reload_config_if_needed(true);
     update_cpu_usage();
+    g_cur_temp = get_cpu_temp();
+    g_smooth_temp = g_cur_temp;
+    for (int i = 0; i < MAX_CORES; i++) {
+        g_smooth_core[i] = (float)g_core_usage[i];
+    }
 
     if (oled_init_hw() < 0) {
-        fprintf(stderr, "argon-1v5-oled-legacy: Unable to initialize OLED on I2C 0x3C\n");
+        fprintf(stderr, "argon-one-v5-oled-legacy: Unable to initialize OLED on I2C 0x3C\n");
     }
 
     pthread_t btn_tid;
@@ -1066,22 +1184,22 @@ int main(int argc, char **argv) {
     bool screensaver_mode = false;
     uint64_t last_switch_ms = get_monotonic_ms();
     uint64_t screensaver_start_ms = last_switch_ms;
-    uint64_t last_refresh_ms = 0;
+    uint64_t last_telemetry_ms = 0;
 
+    // 30 Hz (33.33 ms) Render & Partial-Flush Loop
     while (g_running) {
+        uint64_t frame_start_ms = get_monotonic_ms();
+
         if (access(SHUTDOWN_FLAGFILE, F_OK) == 0) {
             break;
         }
 
         reload_config_if_needed(false);
 
-        uint64_t now_ms = get_monotonic_ms();
-
-        // Handle button press (OLEDSWITCH)
+        // Handle button press (OLEDSWITCH) immediately (<33ms response)
         if (g_oled_switch_req) {
             g_oled_switch_req = 0;
             if (screensaver_mode) {
-                // Wake up from screensaver without jumping page first, or advance as original
                 screensaver_mode = false;
             }
             screen_id++;
@@ -1089,9 +1207,8 @@ int main(int argc, char **argv) {
             if (g_cfg.screen_count > 0 && screen_id >= g_cfg.screen_count) {
                 screen_id = 0;
             }
-            screensaver_start_ms = now_ms;
-            last_switch_ms = now_ms;
-            last_refresh_ms = 0; // Trigger immediate redraw
+            screensaver_start_ms = frame_start_ms;
+            last_switch_ms = frame_start_ms;
         }
 
         if (!g_cfg.enabled || g_cfg.screen_count == 0) {
@@ -1100,12 +1217,12 @@ int main(int argc, char **argv) {
                 oled_flush();
                 oled_power(false);
             }
-            usleep(200000);
+            usleep(100000);
             continue;
         }
 
         // Check auto-switch duration
-        if (g_cfg.switch_duration > 0 && (now_ms - last_switch_ms) >= (uint64_t)g_cfg.switch_duration * 1000ULL) {
+        if (g_cfg.switch_duration > 0 && (frame_start_ms - last_switch_ms) >= (uint64_t)g_cfg.switch_duration * 1000ULL) {
             int total_subpages = 1;
             render_card(g_cfg.screen_list[screen_id], page_subidx, &total_subpages);
             page_subidx++;
@@ -1113,26 +1230,35 @@ int main(int argc, char **argv) {
                 page_subidx = 0;
                 screen_id = (screen_id + 1) % g_cfg.screen_count;
             }
-            last_switch_ms = now_ms;
-            // In auto-switch mode, original Argon script resets screensaver counter on page switch
-            screensaver_start_ms = now_ms;
+            last_switch_ms = frame_start_ms;
+            screensaver_start_ms = frame_start_ms;
             screensaver_mode = false;
-            last_refresh_ms = 0;
         }
 
         // Check screensaver timeout
         if (g_cfg.screensaver_sec > 0 && !screensaver_mode &&
-            (now_ms - screensaver_start_ms) >= (uint64_t)g_cfg.screensaver_sec * 1000ULL) {
+            (frame_start_ms - screensaver_start_ms) >= (uint64_t)g_cfg.screensaver_sec * 1000ULL) {
             screensaver_mode = true;
             oled_clearbuffer(0);
             oled_flush();
             oled_power(false);
         }
 
-        // Live refresh of current screen every refresh_ms (default 1000ms)
-        if (!screensaver_mode && (last_refresh_ms == 0 || (now_ms - last_refresh_ms) >= (uint64_t)g_cfg.refresh_ms)) {
-            update_cpu_usage();
+        if (!screensaver_mode) {
+            // Sample raw CPU & temperature telemetry at configured interval (default 1000ms)
+            if (last_telemetry_ms == 0 || (frame_start_ms - last_telemetry_ms) >= (uint64_t)g_cfg.refresh_ms) {
+                update_cpu_usage();
+                g_cur_temp = get_cpu_temp();
+                last_telemetry_ms = frame_start_ms;
+            }
 
+            // 30 Hz smooth bar interpolation (EMA)
+            for (int i = 0; i < MAX_CORES; i++) {
+                g_smooth_core[i] += ((float)g_core_usage[i] - g_smooth_core[i]) * 0.25f;
+            }
+            g_smooth_temp += (g_cur_temp - g_smooth_temp) * 0.25f;
+
+            // Render active card at 30 Hz & transmit only dirty pixels over I2C
             int tries = 0;
             int total_subpages = 1;
             while (tries < g_cfg.screen_count) {
@@ -1140,7 +1266,6 @@ int main(int argc, char **argv) {
                 if (render_card(g_cfg.screen_list[screen_id], page_subidx, &total_subpages)) {
                     break;
                 }
-                // If card has no data (e.g. "raid" when no RAID exists), advance to next card
                 screen_id = (screen_id + 1) % g_cfg.screen_count;
                 page_subidx = 0;
                 tries++;
@@ -1148,10 +1273,12 @@ int main(int argc, char **argv) {
 
             oled_power(true);
             oled_flush();
-            last_refresh_ms = now_ms;
         }
 
-        usleep(50000); // 50ms responsive event polling
+        uint64_t elapsed_ms = get_monotonic_ms() - frame_start_ms;
+        if (elapsed_ms < 33) {
+            usleep((useconds_t)((33 - elapsed_ms) * 1000ULL));
+        }
     }
 
     // Clean shutdown of OLED
