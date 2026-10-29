@@ -1,7 +1,7 @@
 # Argon ONE V5 — Native C Drivers, Case Essentials & OLED Display Suite for Raspberry Pi 5
 
 [![OLED Legacy: v1.2.0 Stable](https://img.shields.io/badge/OLED%20Legacy-v1.2.0%20Stable-brightgreen?style=flat-square)](#-1-argon-one-v5-oled-legacy-stable--recommended-for-oled-users)
-[![Case Essential: v1.1.0 Stable](https://img.shields.io/badge/Case%20Essential-v1.1.0%20Stable-00b4d8?style=flat-square)](#-2-argon-one-v5-essential-hardware--performance-setup-for-all-cases)
+[![Case Essential: v1.2.0 Stable](https://img.shields.io/badge/Case%20Essential-v1.2.0%20Stable-00b4d8?style=flat-square)](#-2-argon-one-v5-essential-hardware--performance-setup-for-all-cases)
 [![OLED Experimental: v1.1.0 Alpha](https://img.shields.io/badge/OLED%20Experimental-v1.1.0%20Alpha-orange?style=flat-square)](#-3-argon-one-v5-oled-experimental-next-gen-suite--visual-card-studio)
 [![Platform: Raspberry Pi 5 (arm64)](https://img.shields.io/badge/Platform-Raspberry%20Pi%205%20(arm64)-c51a4a?style=flat-square)](https://www.raspberrypi.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green?style=flat-square)](LICENSE)
@@ -19,7 +19,7 @@ Because the **Argon ONE V5** case can be operated **with or without** the option
 | Package | File Name | Target Audience & Purpose |
 | :--- | :--- | :--- |
 | **1. [Argon ONE V5 OLED Legacy](#-1-argon-one-v5-oled-legacy-stable--recommended-for-oled-users)** | [`argon-one-v5-oled-legacy_1.2.0_arm64.deb`](https://github.com/GamingTux/argon-one-v5/releases/tag/v1.2.0-legacy) | **Stable / Production OLED Driver:** Pure-C 1:1 recreation of all original Argon ONE V5 OLED screens, fonts, and GPIO4 button actions—upgraded with **30 Hz SSD1306 partial updates**, **smooth vertical digit roll transitions**, **30 FPS bar animation**, **live `HH:MM:SS` clock**, calibrated thermometer bar, and **0% Python dependencies**. Contains strictly OLED-related configuration (`i2c-dev`). |
-| **2. [Argon ONE V5 Essential](#-2-argon-one-v5-essential-hardware--performance-setup-for-all-cases)** | [`argon-one-v5-essential_1.1.0_arm64.deb`](https://github.com/GamingTux/argon-one-v5/releases/tag/v1.2.0-legacy) | **Universal Case & Performance Setup (With or Without OLED):** Configures Front USB 2.0 ports (`dwc2`), UART0 shutdown power-cut, Pi 5 EEPROM (`PSU_MAX_CURRENT=5000`, `POWER_OFF_ON_HALT=1`), M.2 NVMe PCIe Gen 3, safe 2.8 GHz CPU boost, 4-stage kernel PWM fan curve, 4-core Network RPS/RFS + GICv2 IRQ spread, TCP BBR, Wi-Fi `power_save off`, and I/O queue optimizations. |
+| **2. [Argon ONE V5 Essential](#-2-argon-one-v5-essential-hardware--performance-setup-for-all-cases)** | [`argon-one-v5-essential_1.2.0_arm64.deb`](https://github.com/GamingTux/argon-one-v5/releases/tag/v1.2.0-legacy) | **Universal Case & Performance Setup (With or Without OLED):** Configures Front USB 2.0 ports (`dwc2`), UART0 shutdown power-cut, Pi 5 EEPROM (`PSU_MAX_CURRENT=5000`, `POWER_OFF_ON_HALT=1`, `SDRAM_BANKLOW=1`), M.2 NVMe PCIe Gen 3 + ASPM `performance`, safe 2.8 GHz CPU boost, `schedutil` (1ms) / `ondemand` (10ms) CPU governor, 4-stage kernel PWM fan curve, 4-core Network RPS/RFS + GICv2 IRQ spread, LZ4 ZRAM + LPDDR4X RAM priority, TCP BBR, Wi-Fi `power_save off`, and I/O queue optimizations. |
 | **3. [Argon ONE V5 OLED Experimental](#-3-argon-one-v5-oled-experimental-next-gen-suite--visual-card-studio)** | [`argon-one-v5-oled-experimental_1.1.0_arm64.deb`](https://github.com/GamingTux/argon-one-v5/releases/tag/v1.1.0-alpha) | **Alpha / Work in Progress:** Next-generation OLED dashboard with a Desktop Control Center, WYSIWYG Visual Card Studio (`argon-card-builder`), hardware sensor scanner, and handcrafted **1-bit Terminus Bold** pixel typography. |
 
 ---
@@ -62,26 +62,26 @@ screenlist="clock cpu storage ram temp ip"
 
 ## ⚡ 2. Argon ONE V5 Essential (Hardware & Performance Setup for All Cases)
 
-**`argon-one-v5-essential` (`v1.1.0`)** configures the **Argon ONE V5 case hardware and safe, distro-agnostic Raspberry Pi 5 performance optimizations**. It works on **every Argon ONE V5 case**—whether you have the standard non-OLED version or the OLED version.
+**`argon-one-v5-essential` (`v1.2.0`)** configures the **Argon ONE V5 case hardware and safe, distro-agnostic Raspberry Pi 5 performance optimizations**. It works on **every Argon ONE V5 case**—whether you have the standard non-OLED version or the OLED version.
 
 ### What It Configures Automatically:
 1. **Argon ONE V5 Case Hardware & Bootloader EEPROM (`/boot/firmware/config.txt` & `rpi-eeprom-config`):** *(Existing custom values are never overwritten)*
    * **Front USB 2.0 Ports & Full USB Current:** Enables `dtoverlay=dwc2,dr_mode=host` and `usb_max_current_enable=1` (always placed safely under `[all]`).
-   * **Clean Shutdown Power-Cut & Pi 5 EEPROM:** Enables `dtparam=uart0=on` and configures `PSU_MAX_CURRENT=5000` & `POWER_OFF_ON_HALT=1` in the Pi 5 bootloader EEPROM.
-   * **M.2 NVMe Slot & PCIe Gen 3 Speed:** Enables `dtparam=nvme` and `dtparam=pciex1_gen=3` (doubling NVMe SSD throughput from ~450 MB/s to **~850–900 MB/s**).
+   * **Clean Shutdown Power-Cut & Pi 5 EEPROM (`SDRAM_BANKLOW=1`):** Enables `dtparam=uart0=on` and configures `PSU_MAX_CURRENT=5000`, `POWER_OFF_ON_HALT=1`, and `SDRAM_BANKLOW=1` (LPDDR4X bank-interleaving for +15–25% RAM throughput) in the Pi 5 bootloader EEPROM.
+   * **M.2 NVMe Slot, PCIe Gen 3 Speed & ASPM Performance Policy:** Enables `dtparam=nvme` and `dtparam=pciex1_gen=3` (~850–900 MB/s), and switches `/sys/module/pcie_aspm/parameters/policy` to `performance` to eliminate PCIe L1 sleep wake-up latency on NVMe drives, Host Memory Buffers (HMB), and the RP1 Southbridge.
    * **Safe 2.8 GHz CPU Boost:** Sets `arm_freq=2800` (if no custom `arm_freq` is present) while leaving `v3d_freq` at standard firmware defaults and requiring zero manual over-voltage.
    * **Responsive 4-Stage Kernel PWM Fan Curve:** Configures the Raspberry Pi 5 native PWM fan controller directly via device-tree parameters (`40°C -> 100`, `50°C -> 150`, `60°C -> 200`, `70°C -> 250` with `5°C` hysteresis)—requiring **0% background CPU overhead**.
-2. **Distro-Agnostic Multi-Core, Network & Storage Optimizations:**
+2. **Distro-Agnostic Multi-Core, Memory, Network & Storage Optimizations:**
+   * **Direct-Scheduler CPU Governor (`schedutil` @ 1ms + `ondemand` @ 10ms):** Switches the default CPU frequency governor from the slow 100ms-polling `ondemand` timer to **`schedutil`** (`rate_limit_us=1000` / 1.0 ms direct kernel scheduler integration), while also pre-tuning `ondemand` (`sampling_rate=10000`, `up_threshold=25`, `sampling_down_factor=10`, `io_is_busy=1`).
    * **4-Core Hardware IRQ Distribution & Network RPS/RFS:** Spreads GICv2 level interrupts across all 4 Cortex-A76 cores (`RP1 -> CPU0`, `dwc2 -> CPU1`, `v3d -> CPU2`, `vc4/mmc -> CPU3`) with an `irqbalance` policy script, and enables 4-core Receive Packet Steering (`rps_cpus=f`) on `eth*` and `wlan*`.
-   * **TCP BBR + Fair Queueing & Wi-Fi Low-Latency Mode:** Enables `net.ipv4.tcp_congestion_control=bbr`, `net.core.default_qdisc=fq`, and disables Wi-Fi `power_save` via `udev` to eliminate 100–200 ms ping spikes.
-   * **Fast CPU Governor Ramp-Up (`ondemand`):** Tunes `up_threshold=50`, `sampling_down_factor=2`, and `io_is_busy=1` for snappy desktop and workload responsiveness while preserving cool 1.5 GHz idle clocks.
-   * **Memory, Writeback & VFS Cache Tuning (`/etc/sysctl.d/90-argon-v5-perf.conf`):** Sets `vm.swappiness=10`, `vm.vfs_cache_pressure=50`, `vm.dirty_background_ratio=5`, and `vm.dirty_ratio=10` to prevent I/O writeback stutter.
-   * **NVMe, MicroSD & USB Storage Queue Tuning (`/etc/udev/rules.d/60-argon-v5-perf.rules`):** Sets `scheduler=none` (`512 KB` read-ahead) on NVMe, `mq-deadline` (`256 KB` read-ahead) on MicroSD/USB drives, `rq_affinity=2`, and prevents PCIe Gen 3 ASPM sleep latency spikes.
+   * **LPDDR4X RAM Priority, LZ4 ZRAM & Writeback Tuning (`/etc/sysctl.d/99-z-argon-v5-perf.conf`):** Configures `zram0` to use ultra-fast **`lz4`** compression (3–4× faster than `zstd` on Cortex-A76), prioritizes physical LPDDR4X-4267 RAM before ZRAM (`vm.swappiness=15`, `vm.page-cluster=0`, `vm.vfs_cache_pressure=80`), prevents Direct Reclaim stalls (`vm.watermark_scale_factor=125`, `vm.min_free_kbytes=65536`), and smooths background writeback (`vm.dirty_background_ratio=5`, `vm.dirty_ratio=10`).
+   * **TCP BBR + Fair Queueing & Wi-Fi Low-Latency Mode:** Enables `net.ipv4.tcp_congestion_control=bbr`, `net.core.default_qdisc=fq`, `net.ipv4.tcp_fastopen=3`, and disables Wi-Fi `power_save` via `udev` to eliminate 100–200 ms ping spikes.
+   * **NVMe, MicroSD & USB Storage Queue Tuning (`/etc/udev/rules.d/60-argon-v5-perf.rules`):** Sets `scheduler=none` (`512 KB` read-ahead) on NVMe, `mq-deadline` (`256 KB` read-ahead) on MicroSD/USB drives, and `rq_affinity=2`.
 
 ### Quick Install & Status Check — `Argon ONE V5 Essential`
 ```bash
-wget https://github.com/GamingTux/argon-one-v5/releases/download/v1.2.0-legacy/argon-one-v5-essential_1.1.0_arm64.deb
-sudo apt install ./argon-one-v5-essential_1.1.0_arm64.deb
+wget https://github.com/GamingTux/argon-one-v5/releases/download/v1.2.0-legacy/argon-one-v5-essential_1.2.0_arm64.deb
+sudo apt install ./argon-one-v5-essential_1.2.0_arm64.deb
 
 # Inspect active case hardware and performance settings:
 argon-v5-essential --status
@@ -154,7 +154,7 @@ sudo apt install -y build-essential libgpiod-dev libgpiod3 i2c-tools python3 pyt
 make packages       # Builds all 3 .deb packages in dist/
 # Or individually:
 make deb-legacy       # -> dist/argon-one-v5-oled-legacy_1.2.0_arm64.deb
-make deb-essential    # -> dist/argon-one-v5-essential_1.1.0_arm64.deb
+make deb-essential    # -> dist/argon-one-v5-essential_1.2.0_arm64.deb
 make deb-experimental # -> dist/argon-one-v5-oled-experimental_1.1.0_arm64.deb
 ```
 

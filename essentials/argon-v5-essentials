@@ -1,16 +1,19 @@
 #!/bin/bash
 #
-# Argon ONE V5 Case & Performance Essentials (v1.1.0)
+# Argon ONE V5 Case & Performance Essentials (v1.2.0)
 # Works on all Argon ONE V5 cases (with or without OLED module) across all Linux distros
 #
 
 set -e
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 if [ -e /boot/firmware/config.txt ]; then
     CONFIG="/boot/firmware/config.txt"
 else
     CONFIG="/boot/config.txt"
 fi
+
+STATE_DIR="/var/lib/argon-v5-essential"
 
 ensure_all_section() {
     # Ensure the last section header in config.txt is [all] so appended lines apply globally
@@ -24,21 +27,33 @@ ensure_all_section() {
 }
 
 apply_irq_and_runtime() {
-    # 1. Apply sysctl parameters
+    # 1. Apply sysctl parameters (explicitly load 99-z-argon-v5-perf.conf last so it always wins)
     sysctl --system >/dev/null 2>&1 || true
+    [ -f /etc/sysctl.d/99-z-argon-v5-perf.conf ] && sysctl -p /etc/sysctl.d/99-z-argon-v5-perf.conf >/dev/null 2>&1 || true
 
-    # 2. Tune CPU ondemand governor if active
-    for f in /sys/devices/system/cpu/cpufreq/ondemand/up_threshold; do
-        [ -w "$f" ] && echo 50 > "$f" 2>/dev/null || true
-    done
-    for f in /sys/devices/system/cpu/cpufreq/ondemand/sampling_down_factor; do
-        [ -w "$f" ] && echo 2 > "$f" 2>/dev/null || true
-    done
-    for f in /sys/devices/system/cpu/cpufreq/ondemand/io_is_busy; do
-        [ -w "$f" ] && echo 1 > "$f" 2>/dev/null || true
-    done
+    # 2. CPU Governor Optimization:
+    #    a) Pre-tune ondemand governor (10ms sampling_rate, 25% up_threshold, 10x down_factor)
+    #       in case ondemand is active now or selected later by the user.
+    if [ -d /sys/devices/system/cpu/cpufreq/ondemand ]; then
+        [ -w /sys/devices/system/cpu/cpufreq/ondemand/sampling_rate ] && echo 10000 > /sys/devices/system/cpu/cpufreq/ondemand/sampling_rate 2>/dev/null || true
+        [ -w /sys/devices/system/cpu/cpufreq/ondemand/up_threshold ] && echo 25 > /sys/devices/system/cpu/cpufreq/ondemand/up_threshold 2>/dev/null || true
+        [ -w /sys/devices/system/cpu/cpufreq/ondemand/sampling_down_factor ] && echo 10 > /sys/devices/system/cpu/cpufreq/ondemand/sampling_down_factor 2>/dev/null || true
+        [ -w /sys/devices/system/cpu/cpufreq/ondemand/io_is_busy ] && echo 1 > /sys/devices/system/cpu/cpufreq/ondemand/io_is_busy 2>/dev/null || true
+    fi
+    #    b) Switch default CPU governor to schedutil (direct kernel scheduler integration)
+    if grep -qw "schedutil" /sys/devices/system/cpu/cpu0/cpufreq/scaling_available_governors 2>/dev/null; then
+        for g in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
+            [ -w "$g" ] && echo schedutil > "$g" 2>/dev/null || true
+        done
+        [ -w /sys/devices/system/cpu/cpufreq/schedutil/rate_limit_us ] && echo 1000 > /sys/devices/system/cpu/cpufreq/schedutil/rate_limit_us 2>/dev/null || true
+    fi
 
-    # 3. Disable Wi-Fi power_save & enable 4-core RPS/RFS on active network interfaces
+    # 3. PCIe ASPM Performance Mode (eliminates L1 sleep wake-up latency for NVMe + HMB RAM + RP1)
+    if [ -w /sys/module/pcie_aspm/parameters/policy ]; then
+        echo performance > /sys/module/pcie_aspm/parameters/policy 2>/dev/null || true
+    fi
+
+    # 4. Disable Wi-Fi power_save & enable 4-core RPS/RFS on active network interfaces
     for iface in /sys/class/net/wlan*; do
         [ -e "$iface" ] || continue
         ifname=$(basename "$iface")
@@ -50,7 +65,7 @@ apply_irq_and_runtime() {
         [ -w "$q/rps_flow_cnt" ] && echo 4096 > "$q/rps_flow_cnt" 2>/dev/null || true
     done
 
-    # 4. Distribute GICv2 Level Hardware Interrupts across CPU1..3 (so CPU0 is not bottlenecked)
+    # 5. Distribute GICv2 Level Hardware Interrupts across CPU1..3 (so CPU0 is not bottlenecked)
     #    - CPU0: RP1 PCIe bridge (eth0, xhci USB3, i2c)
     #    - CPU1: dwc2 (Argon ONE V5 Front USB 2.0 ~8000 IRQs/sec)
     #    - CPU2: v3d (VideoCore VII 3D GPU)
@@ -102,11 +117,31 @@ EOF
     fi
 }
 
+configure_zram_lz4() {
+    # Switch ZRAM from CPU-heavy zstd to ultra-fast lz4 if zram0 is present and 0B used
+    if [ -e /sys/block/zram0/comp_algorithm ]; then
+        if ! grep -q "\[lz4\]" /sys/block/zram0/comp_algorithm 2>/dev/null; then
+            used_swap=$(awk '$1 == "/dev/zram0" {print $4}' /proc/swaps 2>/dev/null || echo "0")
+            if [ "${used_swap:-0}" = "0" ]; then
+                systemctl daemon-reload >/dev/null 2>&1 || true
+                systemctl restart systemd-zram-setup@zram0.service >/dev/null 2>&1 || true
+                systemctl start dev-zram0.swap >/dev/null 2>&1 || true
+            fi
+        fi
+    fi
+}
+
 apply_eeprom() {
-    # Ensure Pi 5 EEPROM has PSU_MAX_CURRENT=5000 and POWER_OFF_ON_HALT=1
+    # Ensure Pi 5 EEPROM has PSU_MAX_CURRENT=5000, POWER_OFF_ON_HALT=1, and SDRAM_BANKLOW=1
     if command -v rpi-eeprom-config >/dev/null 2>&1; then
+        mkdir -p "$STATE_DIR"
         tmp_ee=$(mktemp)
-        if rpi-eeprom-config > "$tmp_ee" 2>/dev/null; then
+        if [ -f "$STATE_DIR/eeprom.conf" ]; then
+            cp "$STATE_DIR/eeprom.conf" "$tmp_ee"
+        else
+            rpi-eeprom-config 2>/dev/null | tr -d '\r' > "$tmp_ee" || true
+        fi
+        if [ -s "$tmp_ee" ]; then
             changed=0
             if ! grep -q "^PSU_MAX_CURRENT=" "$tmp_ee"; then
                 echo "PSU_MAX_CURRENT=5000" >> "$tmp_ee"
@@ -116,8 +151,18 @@ apply_eeprom() {
                 echo "POWER_OFF_ON_HALT=1" >> "$tmp_ee"
                 changed=1
             fi
+            if ! grep -q "^SDRAM_BANKLOW=" "$tmp_ee"; then
+                echo "SDRAM_BANKLOW=1" >> "$tmp_ee"
+                changed=1
+            fi
             if [ "$changed" -eq 1 ]; then
-                rpi-eeprom-config --apply "$tmp_ee" >/dev/null 2>&1 || true
+                if rpi-eeprom-config --apply "$tmp_ee" >/dev/null 2>&1; then
+                    cp "$tmp_ee" "$STATE_DIR/eeprom.conf"
+                    chmod 644 "$STATE_DIR/eeprom.conf"
+                fi
+            else
+                cp "$tmp_ee" "$STATE_DIR/eeprom.conf"
+                chmod 644 "$STATE_DIR/eeprom.conf"
             fi
         fi
         rm -f "$tmp_ee"
@@ -184,18 +229,19 @@ EOF
         fi
     fi
 
-    # 6. Pi 5 Bootloader EEPROM (PSU_MAX_CURRENT=5000 & POWER_OFF_ON_HALT=1)
+    # 6. Pi 5 Bootloader EEPROM (PSU_MAX_CURRENT=5000, POWER_OFF_ON_HALT=1, SDRAM_BANKLOW=1)
     apply_eeprom
 
-    # 7. Configure irqbalance policy & udev rules
+    # 7. Configure irqbalance policy, ZRAM lz4 & udev rules
     configure_irqbalance_policy
+    configure_zram_lz4
     udevadm control --reload-rules 2>/dev/null || true
     udevadm trigger --subsystem-match=block --subsystem-match=pci --subsystem-match=net 2>/dev/null || true
 
-    # 8. Apply runtime IRQ, RPS/RFS, Wi-Fi, sysctl & CPU governor optimizations
+    # 8. Apply runtime IRQ, RPS/RFS, Wi-Fi, PCIe ASPM, sysctl & CPU governor optimizations
     apply_irq_and_runtime
 
-    echo "Argon ONE V5 Case & Performance Essentials (v1.1.0) applied successfully."
+    echo "Argon ONE V5 Case & Performance Essentials (v1.2.0) applied successfully."
 }
 
 show_status() {
@@ -212,15 +258,37 @@ show_status() {
         echo "Configured arm_freq    : ${cur_arm:-Standard (2400)} MHz"
         echo -n "Pi 5 PWM Fan Curve     : "; grep -q "fan_temp0=" "$CONFIG" && echo "CONFIGURED (4-Stage)" || echo "Default OS Curve"
     fi
+    if [ -f "$STATE_DIR/eeprom.conf" ]; then
+        ee_src="$STATE_DIR/eeprom.conf"
+    else
+        ee_src=$(mktemp)
+        rpi-eeprom-config 2>/dev/null | tr -d '\r' > "$ee_src" || true
+    fi
+    echo -n "Bootloader EEPROM      : "
+    grep -q "^PSU_MAX_CURRENT=5000" "$ee_src" 2>/dev/null && echo -n "5A_PSU " || true
+    grep -q "^POWER_OFF_ON_HALT=1" "$ee_src" 2>/dev/null && echo -n "HALT_OFF " || true
+    grep -q "^SDRAM_BANKLOW=1" "$ee_src" 2>/dev/null && echo -n "SDRAM_BANKLOW" || true
+    echo ""
+    [ "$ee_src" != "$STATE_DIR/eeprom.conf" ] && rm -f "$ee_src"
     echo "--------------------------------------------------------"
-    up_thr=$(cat /sys/devices/system/cpu/cpufreq/ondemand/up_threshold 2>/dev/null || echo "N/A")
-    down_fac=$(cat /sys/devices/system/cpu/cpufreq/ondemand/sampling_down_factor 2>/dev/null || echo "N/A")
-    echo "CPU Governor Tuning    : up_threshold=$up_thr, sampling_down_factor=$down_fac"
+    gov=$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null || echo "N/A")
+    if [ "$gov" = "schedutil" ]; then
+        rate_us=$(cat /sys/devices/system/cpu/cpufreq/schedutil/rate_limit_us 2>/dev/null || echo "N/A")
+        echo "CPU Governor           : schedutil (rate_limit=${rate_us}us)"
+    else
+        up_thr=$(cat /sys/devices/system/cpu/cpufreq/ondemand/up_threshold 2>/dev/null || echo "N/A")
+        samp_us=$(cat /sys/devices/system/cpu/cpufreq/ondemand/sampling_rate 2>/dev/null || echo "N/A")
+        echo "CPU Governor           : $gov (sampling=${samp_us}us, up_threshold=$up_thr)"
+    fi
+    aspm=$(cat /sys/module/pcie_aspm/parameters/policy 2>/dev/null || echo "N/A")
+    echo "PCIe ASPM Policy       : $aspm"
     if [ -e /sys/block/nvme0n1/queue/scheduler ]; then
         sched=$(cat /sys/block/nvme0n1/queue/scheduler 2>/dev/null)
         ra=$(cat /sys/block/nvme0n1/queue/read_ahead_kb 2>/dev/null)
         echo "NVMe Queue (nvme0n1)   : scheduler=$sched, read_ahead=${ra}KB"
     fi
+    zram_alg=$(cat /sys/block/zram0/comp_algorithm 2>/dev/null || echo "N/A")
+    echo "ZRAM Compression       : $zram_alg"
     echo "TCP Congestion / Qdisc : $(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null) / $(sysctl -n net.core.default_qdisc 2>/dev/null)"
     echo "Sysctl Memory Tuning   : swappiness=$(sysctl -n vm.swappiness 2>/dev/null), vfs_cache=$(sysctl -n vm.vfs_cache_pressure 2>/dev/null), dirty=$(sysctl -n vm.dirty_ratio 2>/dev/null)%"
     rps_eth=$(cat /sys/class/net/eth0/queues/rx-0/rps_cpus 2>/dev/null || echo "N/A")

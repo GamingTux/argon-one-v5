@@ -3,7 +3,11 @@ set -e
 
 if [ "$1" = "purge" ]; then
     rm -f /etc/sysctl.d/90-argon-v5-perf.conf
+    rm -f /etc/sysctl.d/99-z-argon-v5-perf.conf
+    rm -f /etc/systemd/zram-generator.conf.d/90-argon-v5-zram.conf
     rm -f /etc/udev/rules.d/60-argon-v5-perf.rules
+    rm -f /usr/bin/argon-v5-irq-policy
+    rm -rf /var/lib/argon-v5-essential
 fi
 
 exit 0

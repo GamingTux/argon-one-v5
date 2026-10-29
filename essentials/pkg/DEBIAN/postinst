@@ -1,6 +1,8 @@
 #!/bin/bash
 set -e
 
+rm -f /etc/sysctl.d/90-argon-v5-perf.conf
+
 if [ -x /usr/bin/argon-v5-essentials ]; then
     /usr/bin/argon-v5-essentials --apply
 fi

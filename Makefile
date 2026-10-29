@@ -2,7 +2,7 @@ CC ?= gcc
 CFLAGS ?= -O2 -Wall -Wextra -pthread
 LDFLAGS ?= -pthread -lgpiod -lm
 
-VER_ESSENTIAL ?= 1.1.0
+VER_ESSENTIAL ?= 1.2.0
 VER_LEGACY ?= 1.2.0
 VER_EXPERIMENTAL ?= 1.1.0
 
@@ -73,13 +73,15 @@ deb-legacy: argon-1v5-oled-legacy
 
 deb-essential:
 	mkdir -p dist
-	mkdir -p essentials/pkg/usr/bin essentials/pkg/etc/sysctl.d essentials/pkg/etc/udev/rules.d
+	rm -rf essentials/pkg/usr essentials/pkg/etc
+	mkdir -p essentials/pkg/usr/bin essentials/pkg/etc/sysctl.d essentials/pkg/etc/udev/rules.d essentials/pkg/etc/systemd/zram-generator.conf.d
 	cp essentials/argon-v5-essentials essentials/pkg/usr/bin/argon-v5-essential
 	cp essentials/argon-v5-essentials essentials/pkg/usr/bin/argon-v5-essentials
-	cp essentials/90-argon-v5-perf.conf essentials/pkg/etc/sysctl.d/
+	cp essentials/90-argon-v5-perf.conf essentials/pkg/etc/sysctl.d/99-z-argon-v5-perf.conf
+	cp essentials/90-argon-v5-zram.conf essentials/pkg/etc/systemd/zram-generator.conf.d/90-argon-v5-zram.conf
 	cp essentials/60-argon-v5-perf.rules essentials/pkg/etc/udev/rules.d/
 	chmod 755 essentials/pkg/usr/bin/* essentials/pkg/DEBIAN/postinst essentials/pkg/DEBIAN/postrm
-	chmod 644 essentials/pkg/etc/sysctl.d/* essentials/pkg/etc/udev/rules.d/*
+	chmod 644 essentials/pkg/etc/sysctl.d/* essentials/pkg/etc/udev/rules.d/* essentials/pkg/etc/systemd/zram-generator.conf.d/*
 	sed -i "s/^Version:.*/Version: $(VER_ESSENTIAL)/" essentials/pkg/DEBIAN/control
 	dpkg-deb --build --root-owner-group essentials/pkg dist/argon-one-v5-essential_$(VER_ESSENTIAL)_arm64.deb
 	cd dist && sha256sum *.deb > SHA256SUMS
