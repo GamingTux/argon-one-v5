@@ -1,12 +1,14 @@
-Package: argon-one-v5-essentials
+Package: argon-one-v5-essential
 Version: 1.0.0
 Section: utils
 Priority: optional
 Architecture: arm64
 Maintainer: GamingTux <240287558+GamingTux@users.noreply.github.com>
-Description: Argon ONE V5 Case & Performance Essentials (for cases with or without OLED)
+Replaces: argon-one-v5-essentials
+Conflicts: argon-one-v5-essentials
+Description: Argon ONE V5 Essential Case & Performance Configuration (Raspberry Pi 5)
  Configures all hardware features and safe performance optimizations for the
- Argon ONE V5 Raspberry Pi 5 case (independent of the optional OLED module):
+ Argon ONE V5 Raspberry Pi 5 case (works both with and without the OLED module):
   - Front USB 2.0 ports (dwc2 host mode) and full USB current budget
   - UART0 shutdown detection for clean case power-cut
   - M.2 NVMe slot activation and PCIe Gen 3 speed

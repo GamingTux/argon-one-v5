@@ -1,11 +1,13 @@
-Package: argon-1v5-oled-legacy
+Package: argon-one-v5-oled-legacy
 Version: 1.0.0
 Section: utils
 Priority: optional
 Architecture: arm64
 Maintainer: GamingTux <240287558+GamingTux@users.noreply.github.com>
 Depends: libgpiod3, i2c-tools
-Description: High-speed C legacy daemon for Argon ONE V5 OLED (Original Cards + Fast Refresh)
+Replaces: argon-1v5-oled-legacy
+Conflicts: argon-1v5-oled-legacy
+Description: Argon ONE V5 OLED Legacy C-Daemon (Original Screens + 1s Live Refresh)
  Drop-in pure C replacement for the original Argon ONE V5 OLED Python scripts.
  Recreates all original Argon ONE V5 OLED screens (clock, cpu, storage, raid,
  ram, temp, ip, logo1v5), fonts, configuration files (/etc/argononeoled.conf),

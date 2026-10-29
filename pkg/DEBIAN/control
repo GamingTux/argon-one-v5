@@ -1,13 +1,15 @@
-Package: argon-v5-oled
-Version: 1.1.0-alpha
+Package: argon-one-v5-oled-experimental
+Version: 1.1.0
 Section: utils
 Priority: optional
 Architecture: arm64
 Maintainer: GamingTux <240287558+GamingTux@users.noreply.github.com>
 Depends: libgpiod3, i2c-tools
 Recommends: python3, python3-tk, python3-pil
-Description: Lightweight C daemon, CLI & Control Center for Argon ONE V5 OLED (Alpha)
- High-performance, low-memory C driver for the Argon ONE V5 (Raspberry Pi 5)
- SSD1306 128x64 OLED display and GPIO4 hardware button. Features live CPU
- sparkline graphs, NVMe read/write stats, RAM, network bandwidth, digital clock,
- smart burn-in protection, and button interaction.
+Replaces: argon-v5-oled
+Conflicts: argon-v5-oled
+Description: Argon ONE V5 OLED Experimental Next-Gen Suite & Visual Card Studio
+ Next-generation C daemon, CLI, Desktop Control Center, and Visual Card Builder
+ for the Argon ONE V5 (Raspberry Pi 5) SSD1306 128x64 I2C OLED display.
+ Features pixel-perfect 1-bit Terminus Bold bitmap typography, custom card
+ design tools, hardware sensor discovery, and live shared-memory OLED mirroring.
