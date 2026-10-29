@@ -424,6 +424,46 @@ static void oled_drawfilledrectangle(int x, int y, int wd, int ht, int mode) {
     }
 }
 
+#define MAX_TEXT_SLOTS 16
+#define TEXT_ANIM_STEPS 6
+
+typedef struct {
+    bool used;
+    int x;
+    int y;
+    int charwd;
+    char prev_text[32];
+    char curr_text[32];
+    int anim_step;
+} TextSlot;
+
+static TextSlot g_text_slots[MAX_TEXT_SLOTS];
+
+static void reset_text_slots(void) {
+    memset(g_text_slots, 0, sizeof(g_text_slots));
+}
+
+static void step_text_slots(void) {
+    for (int i = 0; i < MAX_TEXT_SLOTS; i++) {
+        if (g_text_slots[i].used && g_text_slots[i].anim_step < TEXT_ANIM_STEPS) {
+            g_text_slots[i].anim_step++;
+        }
+    }
+}
+
+static size_t decode_oled_string(const char *src, uint8_t *out, size_t max_len) {
+    size_t out_idx = 0;
+    for (size_t i = 0; src[i] != '\0' && out_idx < max_len; i++) {
+        uint8_t ch = (uint8_t)src[i];
+        if (ch == 0xC2 && (uint8_t)src[i + 1] == 0xB0) {
+            ch = 167;
+            i++;
+        }
+        out[out_idx++] = ch;
+    }
+    return out_idx;
+}
+
 static void oled_writetext(const char *textdata, int x, int y, int charwd, int mode) {
     if (!textdata) return;
     if (charwd < 6) charwd = 6;
@@ -440,27 +480,90 @@ static void oled_writetext(const char *textdata, int x, int y, int charwd, int m
         charwd = 6;
     }
 
-    int numfontrow = charht >> 3;
-    for (size_t ctr = 0; textdata[ctr] != '\0'; ctr++) {
-        uint8_t ch = (uint8_t)textdata[ctr];
-        // Support UTF-8 degree symbol 0xC2 0xB0 -> 0xA7 (167)
-        if (ch == 0xC2 && (uint8_t)textdata[ctr + 1] == 0xB0) {
-            ch = 167;
-            ctr++;
+    // Find or allocate a TextSlot for smooth vertical digit roll animation
+    TextSlot *slot = NULL;
+    for (int i = 0; i < MAX_TEXT_SLOTS; i++) {
+        if (g_text_slots[i].used && g_text_slots[i].y == y && g_text_slots[i].charwd == charwd &&
+            abs(g_text_slots[i].x - x) <= 16) {
+            slot = &g_text_slots[i];
+            break;
         }
-        int fontoffset = ((int)ch) * charwd;
+    }
+    if (!slot) {
+        for (int i = 0; i < MAX_TEXT_SLOTS; i++) {
+            if (!g_text_slots[i].used) {
+                slot = &g_text_slots[i];
+                slot->used = true;
+                slot->x = x;
+                slot->y = y;
+                slot->charwd = charwd;
+                snprintf(slot->prev_text, sizeof(slot->prev_text), "%s", textdata);
+                snprintf(slot->curr_text, sizeof(slot->curr_text), "%s", textdata);
+                slot->anim_step = TEXT_ANIM_STEPS;
+                break;
+            }
+        }
+    } else if (strcmp(slot->curr_text, textdata) != 0) {
+        snprintf(slot->prev_text, sizeof(slot->prev_text), "%s", slot->curr_text);
+        snprintf(slot->curr_text, sizeof(slot->curr_text), "%s", textdata);
+        slot->x = x;
+        slot->anim_step = 1;
+    }
+
+    uint8_t new_chars[32] = {0};
+    uint8_t old_chars[32] = {0};
+    size_t new_len = decode_oled_string(textdata, new_chars, 32);
+    size_t old_len = slot ? decode_oled_string(slot->prev_text, old_chars, 32) : new_len;
+    int anim_step = slot ? slot->anim_step : TEXT_ANIM_STEPS;
+
+    int numfontrow = charht >> 3;
+    for (size_t ctr = 0; ctr < new_len; ctr++) {
+        uint8_t ch = new_chars[ctr];
+        uint8_t old_ch = (ctr < old_len) ? old_chars[ctr] : ch;
+        if (old_len != new_len) {
+            // Align from the right for numbers when digit count changes (e.g. "9%" -> "10%")
+            ssize_t old_idx = (ssize_t)ctr - ((ssize_t)new_len - (ssize_t)old_len);
+            old_ch = (old_idx >= 0 && (size_t)old_idx < old_len) ? old_chars[old_idx] : ' ';
+        }
+
+        bool animate_char = (anim_step < TEXT_ANIM_STEPS) && (ch != old_ch);
+        int fontoffset_new = ((int)ch) * charwd;
+        int fontoffset_old = ((int)old_ch) * charwd;
+
         for (int fontcol = 0; fontcol < charwd && x < OLED_WIDTH; fontcol++) {
+            uint8_t col_bytes[2] = {0, 0};
+            if (!animate_char) {
+                for (int fontrow = 0; fontrow < numfontrow; fontrow++) {
+                    col_bytes[fontrow] = fontbytes[fontoffset_new + fontcol + (256 * charwd * fontrow)];
+                }
+            } else if (charht == 16) {
+                uint16_t old16 = (uint16_t)fontbytes[fontoffset_old + fontcol] |
+                                 ((uint16_t)fontbytes[fontoffset_old + fontcol + (256 * charwd)] << 8);
+                uint16_t new16 = (uint16_t)fontbytes[fontoffset_new + fontcol] |
+                                 ((uint16_t)fontbytes[fontoffset_new + fontcol + (256 * charwd)] << 8);
+                int shift = (anim_step * 18) / TEXT_ANIM_STEPS;
+                uint32_t pair32 = (uint32_t)old16 | ((uint32_t)new16 << 18);
+                uint16_t cur16 = (uint16_t)((pair32 >> shift) & 0xFFFFU);
+                col_bytes[0] = (uint8_t)(cur16 & 0xFFU);
+                col_bytes[1] = (uint8_t)((cur16 >> 8) & 0xFFU);
+            } else {
+                uint8_t old8 = fontbytes[fontoffset_old + fontcol];
+                uint8_t new8 = fontbytes[fontoffset_new + fontcol];
+                int shift = (anim_step * 9) / TEXT_ANIM_STEPS;
+                uint32_t pair32 = (uint32_t)old8 | ((uint32_t)new8 << 9);
+                col_bytes[0] = (uint8_t)((pair32 >> shift) & 0xFFU);
+            }
+
             if ((y & 0x07) == 0) {
                 int row = y & 0xF8;
                 for (int fontrow = 0; fontrow < numfontrow && row < OLED_HEIGHT && x >= 0; fontrow++) {
-                    uint8_t curbyte = fontbytes[fontoffset + fontcol + (256 * charwd * fontrow)];
-                    oled_writebyterow(x, row, curbyte, mode);
+                    oled_writebyterow(x, row, col_bytes[fontrow], mode);
                     row += 8;
                 }
             } else {
                 int row = y;
                 for (int fontrow = 0; fontrow < numfontrow && row < OLED_HEIGHT && x >= 0; fontrow++) {
-                    uint8_t curbyte = fontbytes[fontoffset + fontcol + (256 * charwd * fontrow)];
+                    uint8_t curbyte = col_bytes[fontrow];
                     for (int subrow = 0; subrow < 8 && row < OLED_HEIGHT; subrow++) {
                         int val = (curbyte & (1 << subrow)) ? 1 : 0;
                         oled_writebuffer(x, row, val, mode);
@@ -977,12 +1080,18 @@ static bool render_card(const char *screen_name, int page_subidx, int *out_pages
         return true;
 
     } else if (strcmp(screen_name, "ram") == 0) {
+        static char cached_pct[16] = "0%";
+        static char cached_tot[16] = "0GB";
+        static uint64_t last_ram_ms = 0;
+        uint64_t now_ms = get_monotonic_ms();
+        if (last_ram_ms == 0 || (now_ms - last_ram_ms) >= 1000ULL) {
+            get_ram_info(cached_pct, sizeof(cached_pct), cached_tot, sizeof(cached_tot));
+            last_ram_ms = now_ms;
+        }
         oled_loadbg("bgram");
-        char pct[16], tot[16];
-        get_ram_info(pct, sizeof(pct), tot, sizeof(tot));
-        oled_writetextaligned(pct, STD_LEFT_OFFSET, 8, OLED_WIDTH - STD_LEFT_OFFSET, 1, FONT_WD_REG, 0);
+        oled_writetextaligned(cached_pct, STD_LEFT_OFFSET, 8, OLED_WIDTH - STD_LEFT_OFFSET, 1, FONT_WD_REG, 0);
         oled_writetextaligned("of", STD_LEFT_OFFSET, 24, OLED_WIDTH - STD_LEFT_OFFSET, 1, FONT_WD_REG, 0);
-        oled_writetextaligned(tot, STD_LEFT_OFFSET, 40, OLED_WIDTH - STD_LEFT_OFFSET, 1, FONT_WD_REG, 0);
+        oled_writetextaligned(cached_tot, STD_LEFT_OFFSET, 40, OLED_WIDTH - STD_LEFT_OFFSET, 1, FONT_WD_REG, 0);
         return true;
 
     } else if (strcmp(screen_name, "temp") == 0) {
@@ -1028,28 +1137,33 @@ static bool render_card(const char *screen_name, int page_subidx, int *out_pages
         return true;
 
     } else {
-        // Default: "clock" with live HH:MM:SS seconds display
+        // Default: "clock" with live HH:MM:SS seconds display (queried 2x per second / every 500ms)
         oled_loadbg("bgtime");
         static const char *weekday_names[] = { "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" };
         static const char *month_names[] = {
             "JAN", "FEB", "MAR", "APR", "MAY", "JUN",
             "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"
         };
-        time_t now = time(NULL);
-        struct tm tm_now;
-        localtime_r(&now, &tm_now);
+        static struct tm cached_tm;
+        static uint64_t last_clock_ms = 0;
+        uint64_t now_ms = get_monotonic_ms();
+        if (last_clock_ms == 0 || (now_ms - last_clock_ms) >= 500ULL) {
+            time_t now = time(NULL);
+            localtime_r(&now, &cached_tm);
+            last_clock_ms = now_ms;
+        }
 
         char md_str[16];
-        if (tm_now.tm_mday < 10) {
-            snprintf(md_str, sizeof(md_str), "%s %d", month_names[tm_now.tm_mon], tm_now.tm_mday);
+        if (cached_tm.tm_mday < 10) {
+            snprintf(md_str, sizeof(md_str), "%s %d", month_names[cached_tm.tm_mon], cached_tm.tm_mday);
         } else {
-            snprintf(md_str, sizeof(md_str), "%s%d", month_names[tm_now.tm_mon], tm_now.tm_mday);
+            snprintf(md_str, sizeof(md_str), "%s%d", month_names[cached_tm.tm_mon], cached_tm.tm_mday);
         }
         oled_writetextaligned(md_str, STD_LEFT_OFFSET, 8, OLED_WIDTH - STD_LEFT_OFFSET, 1, FONT_WD_REG, 0);
-        oled_writetextaligned(weekday_names[tm_now.tm_wday], STD_LEFT_OFFSET, 24, OLED_WIDTH - STD_LEFT_OFFSET, 1, FONT_WD_REG, 0);
+        oled_writetextaligned(weekday_names[cached_tm.tm_wday], STD_LEFT_OFFSET, 24, OLED_WIDTH - STD_LEFT_OFFSET, 1, FONT_WD_REG, 0);
 
         char hms_str[16];
-        snprintf(hms_str, sizeof(hms_str), "%02d:%02d:%02d", tm_now.tm_hour, tm_now.tm_min, tm_now.tm_sec);
+        snprintf(hms_str, sizeof(hms_str), "%02d:%02d:%02d", cached_tm.tm_hour, cached_tm.tm_min, cached_tm.tm_sec);
         oled_writetextaligned(hms_str, STD_LEFT_OFFSET, 40, OLED_WIDTH - STD_LEFT_OFFSET, 1, FONT_WD_REG, 0);
         return true;
     }
@@ -1058,6 +1172,14 @@ static bool render_card(const char *screen_name, int page_subidx, int *out_pages
 // ============================================================================
 // GPIO4 Power & Page Switch Button Monitor Thread (libgpiod v2)
 // ============================================================================
+static void log_button_event(const char *msg, uint64_t val) {
+    FILE *fp = fopen("/dev/shm/argon_button_debug.log", "a");
+    if (fp) {
+        fprintf(fp, "[%llu ms] %s (%llu)\n", (unsigned long long)get_monotonic_ms(), msg, (unsigned long long)val);
+        fclose(fp);
+    }
+}
+
 static void *button_monitor_thread(void *arg) {
     (void)arg;
     const char *chips[] = { "/dev/gpiochip4", "/dev/gpiochip0" };
@@ -1071,7 +1193,9 @@ static void *button_monitor_thread(void *arg) {
     struct gpiod_line_settings *settings = gpiod_line_settings_new();
     gpiod_line_settings_set_direction(settings, GPIOD_LINE_DIRECTION_INPUT);
     gpiod_line_settings_set_edge_detection(settings, GPIOD_LINE_EDGE_BOTH);
-    gpiod_line_settings_set_bias(settings, GPIOD_LINE_BIAS_PULL_DOWN);
+    // RP1 GPIO 0..8 default to hardware Pull-Up (pu); button is an open switch to GND (active-LOW)
+    gpiod_line_settings_set_bias(settings, GPIOD_LINE_BIAS_PULL_UP);
+    gpiod_line_settings_set_debounce_period_us(settings, 15000); // 15ms hardware debounce
 
     struct gpiod_line_config *line_cfg = gpiod_line_config_new();
     unsigned int offsets[1] = { 4 };
@@ -1093,8 +1217,8 @@ static void *button_monitor_thread(void *arg) {
     struct gpiod_edge_event_buffer *ev_buf = gpiod_edge_event_buffer_new(16);
     int fd = gpiod_line_request_get_fd(req);
     struct pollfd pfd = { .fd = fd, .events = POLLIN };
-    uint64_t rise_ts_ns = 0;
-    bool handled_pulse = false;
+    uint64_t press_start_ms = 0;
+    uint64_t last_switch_trig_ms = 0;
 
     while (g_running) {
         int ret = poll(&pfd, 1, 250);
@@ -1103,52 +1227,31 @@ static void *button_monitor_thread(void *arg) {
             for (int i = 0; i < n; i++) {
                 struct gpiod_edge_event *ev = gpiod_edge_event_buffer_get_event(ev_buf, i);
                 int type = gpiod_edge_event_get_event_type(ev);
-                uint64_t ts_ns = gpiod_edge_event_get_timestamp_ns(ev);
+                uint64_t now_ms = get_monotonic_ms();
 
-                if (type == GPIOD_EDGE_EVENT_RISING_EDGE) {
-                    rise_ts_ns = ts_ns;
-                    handled_pulse = false;
-
-                    // Active 10ms polling while GPIO4 is HIGH (exact match with argonpowerbutton.py)
-                    int pulsetime = 0;
-                    while (gpiod_line_request_get_value(req, 4) == GPIOD_LINE_VALUE_ACTIVE && pulsetime < 500) {
-                        usleep(10000); // 10ms
-                        pulsetime++;
+                if (type == GPIOD_EDGE_EVENT_FALLING_EDGE) {
+                    // Button pressed down (active-low: HIGH -> LOW)
+                    press_start_ms = now_ms;
+                    log_button_event("FALLING_EDGE (press)", now_ms);
+                    if (g_oledswitch_only && (now_ms - last_switch_trig_ms) >= 150ULL) {
+                        g_oled_switch_req = 1;
+                        last_switch_trig_ms = now_ms;
                     }
-                    if (pulsetime > 0) {
-                        handled_pulse = true;
-                        if (g_oledswitch_only) {
-                            if (pulsetime >= 1) {
-                                g_oled_switch_req = 1;
-                            }
-                        } else {
-                            if (pulsetime >= 2 && pulsetime <= 3) {
-                                g_reboot_req = 1;
-                                g_running = 0;
-                            } else if (pulsetime >= 4 && pulsetime <= 5) {
-                                g_shutdown_req = 1;
-                                g_running = 0;
-                            } else if (pulsetime >= 6) {
-                                g_oled_switch_req = 1;
-                            }
-                        }
-                    }
-                } else if (type == GPIOD_EDGE_EVENT_FALLING_EDGE && rise_ts_ns > 0 && !handled_pulse) {
-                    uint64_t pulse_ms = (ts_ns > rise_ts_ns) ? ((ts_ns - rise_ts_ns) / 1000000ULL) : 0;
-                    if (pulse_ms >= 8) {
-                        rise_ts_ns = 0;
-                        if (g_oledswitch_only) {
+                } else if (type == GPIOD_EDGE_EVENT_RISING_EDGE) {
+                    // Button released (LOW -> HIGH)
+                    uint64_t duration_ms = (press_start_ms > 0 && now_ms >= press_start_ms)
+                                           ? (now_ms - press_start_ms) : 0;
+                    press_start_ms = 0;
+                    log_button_event("RISING_EDGE (release)", duration_ms);
+                    if (!g_oledswitch_only) {
+                        if (duration_ms >= 15 && duration_ms <= 35) {
+                            g_reboot_req = 1;
+                            g_running = 0;
+                        } else if (duration_ms >= 36 && duration_ms <= 55) {
+                            g_shutdown_req = 1;
+                            g_running = 0;
+                        } else if (duration_ms >= 56) {
                             g_oled_switch_req = 1;
-                        } else {
-                            if (pulse_ms >= 15 && pulse_ms <= 35) {
-                                g_reboot_req = 1;
-                                g_running = 0;
-                            } else if (pulse_ms >= 36 && pulse_ms <= 55) {
-                                g_shutdown_req = 1;
-                                g_running = 0;
-                            } else if (pulse_ms >= 56) {
-                                g_oled_switch_req = 1;
-                            }
                         }
                     }
                 }
@@ -1235,6 +1338,8 @@ int main(int argc, char **argv) {
     uint64_t last_switch_ms = get_monotonic_ms();
     uint64_t screensaver_start_ms = last_switch_ms;
     uint64_t last_telemetry_ms = 0;
+    uint64_t last_digits_ms = 0;
+    float live_temp = g_cur_temp;
 
     // 30 Hz (33.33 ms) Render & Partial-Flush Loop
     while (g_running) {
@@ -1257,6 +1362,7 @@ int main(int argc, char **argv) {
             if (g_cfg.screen_count > 0 && screen_id >= g_cfg.screen_count) {
                 screen_id = 0;
             }
+            reset_text_slots();
             screensaver_start_ms = frame_start_ms;
             last_switch_ms = frame_start_ms;
         }
@@ -1280,6 +1386,7 @@ int main(int argc, char **argv) {
                 page_subidx = 0;
                 screen_id = (screen_id + 1) % g_cfg.screen_count;
             }
+            reset_text_slots();
             last_switch_ms = frame_start_ms;
             screensaver_start_ms = frame_start_ms;
             screensaver_mode = false;
@@ -1295,21 +1402,27 @@ int main(int argc, char **argv) {
         }
 
         if (!screensaver_mode) {
-            // Query CPU & temperature 4x per second (every 250ms)
+            // Query CPU & temperature 4x per second (every 250ms) for smooth bar targets
             if (last_telemetry_ms == 0 || (frame_start_ms - last_telemetry_ms) >= 250ULL) {
                 update_cpu_usage();
-                g_cur_temp = get_cpu_temp();
+                live_temp = get_cpu_temp();
+                last_telemetry_ms = frame_start_ms;
+            }
+
+            // Update numeric text digits only 1x per second (every 1000ms)
+            if (last_digits_ms == 0 || (frame_start_ms - last_digits_ms) >= 1000ULL) {
                 for (int i = 0; i < MAX_CORES; i++) {
                     g_core_usage[i] = (int)(g_live_core[i] + 0.5f);
                 }
-                last_telemetry_ms = frame_start_ms;
+                g_cur_temp = live_temp;
+                last_digits_ms = frame_start_ms;
             }
 
             // 30 Hz fluid bar animation (glides smoothly across all 30 frames/sec)
             for (int i = 0; i < MAX_CORES; i++) {
                 g_smooth_core[i] += (g_live_core[i] - g_smooth_core[i]) * 0.14f;
             }
-            g_smooth_temp += (g_cur_temp - g_smooth_temp) * 0.14f;
+            g_smooth_temp += (live_temp - g_smooth_temp) * 0.14f;
 
             // Render active card at 30 Hz & transmit only dirty pixels over I2C
             int tries = 0;
@@ -1321,9 +1434,11 @@ int main(int argc, char **argv) {
                 }
                 screen_id = (screen_id + 1) % g_cfg.screen_count;
                 page_subidx = 0;
+                reset_text_slots();
                 tries++;
             }
 
+            step_text_slots();
             oled_power(true);
             oled_flush();
         }

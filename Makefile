@@ -3,7 +3,7 @@ CFLAGS ?= -O2 -Wall -Wextra -pthread
 LDFLAGS ?= -pthread -lgpiod -lm
 
 VER_ESSENTIAL ?= 1.0.0
-VER_LEGACY ?= 1.1.2
+VER_LEGACY ?= 1.2.0
 VER_EXPERIMENTAL ?= 1.1.0
 
 DAEMON_SRCS = src/main.c src/ssd1306.c src/font.c src/telemetry.c src/button.c src/config.c
