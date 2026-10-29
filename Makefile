@@ -2,6 +2,10 @@ CC ?= gcc
 CFLAGS ?= -O2 -Wall -Wextra -pthread
 LDFLAGS ?= -pthread -lgpiod -lm
 
+VER_ESSENTIAL ?= 1.0.0
+VER_LEGACY ?= 1.0.0
+VER_EXPERIMENTAL ?= 1.1.0
+
 DAEMON_SRCS = src/main.c src/ssd1306.c src/font.c src/telemetry.c src/button.c src/config.c
 CLI_SRCS = src/cli.c
 LEGACY_SRCS = legacy/argon_legacy_oled.c
@@ -48,7 +52,8 @@ deb: all
 	cp argon-v5-oled.conf pkg/etc/
 	cp argon-v5-oled.service pkg/etc/systemd/system/
 	chmod 755 pkg/usr/bin/*
-	dpkg-deb --build --root-owner-group pkg dist/argon-one-v5-oled-experimental_1.1.0_arm64.deb
+	sed -i "s/^Version:.*/Version: $(VER_EXPERIMENTAL)/" pkg/DEBIAN/control
+	dpkg-deb --build --root-owner-group pkg dist/argon-one-v5-oled-experimental_$(VER_EXPERIMENTAL)_arm64.deb
 	cd dist && sha256sum *.deb > SHA256SUMS
 
 deb-experimental: deb
@@ -62,7 +67,8 @@ deb-legacy: argon-1v5-oled-legacy
 	cp legacy/argon-1v5-oled-legacy.service legacy/pkg/etc/systemd/system/
 	cp legacy/argon-1v5-oled-shutdown legacy/pkg/usr/lib/systemd/system-shutdown/
 	chmod 755 legacy/pkg/usr/bin/* legacy/pkg/usr/lib/systemd/system-shutdown/* legacy/pkg/DEBIAN/postinst legacy/pkg/DEBIAN/prerm legacy/pkg/DEBIAN/postrm
-	dpkg-deb --build --root-owner-group legacy/pkg dist/argon-one-v5-oled-legacy_1.0.0_arm64.deb
+	sed -i "s/^Version:.*/Version: $(VER_LEGACY)/" legacy/pkg/DEBIAN/control
+	dpkg-deb --build --root-owner-group legacy/pkg dist/argon-one-v5-oled-legacy_$(VER_LEGACY)_arm64.deb
 	cd dist && sha256sum *.deb > SHA256SUMS
 
 deb-essential:
@@ -74,7 +80,8 @@ deb-essential:
 	cp essentials/60-argon-v5-perf.rules essentials/pkg/etc/udev/rules.d/
 	chmod 755 essentials/pkg/usr/bin/* essentials/pkg/DEBIAN/postinst essentials/pkg/DEBIAN/postrm
 	chmod 644 essentials/pkg/etc/sysctl.d/* essentials/pkg/etc/udev/rules.d/*
-	dpkg-deb --build --root-owner-group essentials/pkg dist/argon-one-v5-essential_1.0.0_arm64.deb
+	sed -i "s/^Version:.*/Version: $(VER_ESSENTIAL)/" essentials/pkg/DEBIAN/control
+	dpkg-deb --build --root-owner-group essentials/pkg dist/argon-one-v5-essential_$(VER_ESSENTIAL)_arm64.deb
 	cd dist && sha256sum *.deb > SHA256SUMS
 
 deb-essentials: deb-essential
