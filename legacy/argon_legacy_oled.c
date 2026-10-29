@@ -1,7 +1,8 @@
 /*
- * argon-1v5-oled-legacy
+ * argon-1v5-oled-legacy (v1.2.1)
  * High-performance C implementation of the original Argon ONE V5 OLED cards
- * and functions, enhanced with fast 1-second live value updates and zero flicker.
+ * and functions, enhanced with 30 FPS smooth transitions, partial SSD1306
+ * window updates, 1-second live value refresh, and zero flicker.
  */
 
 #define _GNU_SOURCE
@@ -13,6 +14,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <math.h>
 #include <time.h>
 #include <signal.h>
 #include <pthread.h>
@@ -23,7 +25,6 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
-#include <ifaddrs.h>
 #include <linux/i2c-dev.h>
 #include <gpiod.h>
 
@@ -39,8 +40,8 @@
 #define FONT_WD_REG     8
 #define STD_LEFT_OFFSET 54
 
-#define SHUTDOWN_FLAGFILE "/dev/shm/argonshutdownflag.txt"
-#define SHM_FB_PATH       "/dev/shm/argon_oled_fb.bin"
+// Stored in root-owned /run (0755) instead of world-writable /dev/shm (1777)
+#define SHUTDOWN_FLAGFILE "/run/argon-oled-shutdown.flag"
 
 static volatile sig_atomic_t g_running = 1;
 static volatile sig_atomic_t g_oled_switch_req = 0;
@@ -84,7 +85,7 @@ typedef struct {
 
 static LegacyConfig g_cfg;
 
-// CPU Snapshot state for 30 Hz sliding-window live per-core usage
+// CPU Snapshot state for sliding-window live per-core usage
 typedef struct {
     uint64_t total;
     uint64_t idle;
@@ -97,6 +98,7 @@ static int g_cpu_ring_head = 0;
 static int g_cpu_ring_count = 0;
 static int g_stat_fd = -1;
 static int g_temp_fd = -1;
+static int g_mem_fd  = -1;
 
 static float g_live_core[MAX_CORES];
 static int g_core_usage[MAX_CORES];
@@ -140,10 +142,13 @@ static uint64_t get_monotonic_ms(void) {
 // Asset Loading (Embedded + optional /etc/argon/oled/*.bin override)
 // ============================================================================
 static void load_bin_override(const char *path, uint8_t *dest, size_t len) {
-    int fd = open(path, O_RDONLY);
+    int fd = open(path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
     if (fd < 0) return;
-    ssize_t r = read(fd, dest, len);
-    (void)r;
+    struct stat st;
+    if (fstat(fd, &st) == 0 && S_ISREG(st.st_mode) && (size_t)st.st_size == len) {
+        ssize_t r = read(fd, dest, len);
+        (void)r;
+    }
     close(fd);
 }
 
@@ -174,7 +179,7 @@ static void init_assets(void) {
 }
 
 // ============================================================================
-// I2C SSD1306 Driver (Flicker-Free Direct GDDRAM Transfer)
+// I2C SSD1306 Driver (Flicker-Free Direct GDDRAM Transfer + Self-Healing)
 // ============================================================================
 static int oled_cmd(uint8_t cmd) {
     if (g_i2c_fd < 0) return -1;
@@ -185,14 +190,17 @@ static int oled_cmd(uint8_t cmd) {
 static void oled_power(bool on) {
     if (g_i2c_fd < 0) return;
     if (g_oled_powered == on) return;
-    oled_cmd(on ? 0xAF : 0xAE);
-    g_oled_powered = on;
+    if (oled_cmd(on ? 0xAF : 0xAE) == 0) {
+        g_oled_powered = on;
+    } else {
+        g_has_flushed = false;
+    }
 }
 
 static int oled_init_hw(void) {
     const char *devs[] = { "/dev/i2c-1", "/dev/i2c-0", "/dev/i2c-13", "/dev/i2c-14" };
     for (int i = 0; i < 4; i++) {
-        int fd = open(devs[i], O_RDWR);
+        int fd = open(devs[i], O_RDWR | O_CLOEXEC);
         if (fd >= 0) {
             if (ioctl(fd, I2C_SLAVE, OLED_I2C_ADDR) >= 0) {
                 uint8_t test[2] = { 0x00, 0xE3 }; // NOP command
@@ -225,33 +233,39 @@ static int oled_init_hw(void) {
         0xAF        // Display ON
     };
     for (size_t i = 0; i < sizeof(init_seq); i++) {
-        oled_cmd(init_seq[i]);
+        if (oled_cmd(init_seq[i]) < 0) {
+            close(g_i2c_fd);
+            g_i2c_fd = -1;
+            return -1;
+        }
     }
     g_oled_powered = true;
+    g_has_flushed = false;
     return 0;
 }
 
-static void oled_set_window(uint8_t col_start, uint8_t col_end, uint8_t page_start, uint8_t page_end) {
+static bool oled_set_window(uint8_t col_start, uint8_t col_end, uint8_t page_start, uint8_t page_end) {
     uint8_t cmd[7] = {
         0x00,       // Control byte: command stream
         0x21, col_start, col_end,
         0x22, page_start, page_end
     };
-    ssize_t w = write(g_i2c_fd, cmd, sizeof(cmd));
-    (void)w;
+    return (write(g_i2c_fd, cmd, sizeof(cmd)) == (ssize_t)sizeof(cmd));
 }
 
-static void oled_send_data(const uint8_t *data, int len) {
+static bool oled_send_data(const uint8_t *data, int len) {
     uint8_t chunk[65];
     chunk[0] = 0x40; // Control byte: GDDRAM data stream
     int offset = 0;
     while (offset < len) {
         int n = (len - offset > 64) ? 64 : (len - offset);
         memcpy(&chunk[1], &data[offset], n);
-        ssize_t w = write(g_i2c_fd, chunk, n + 1);
-        (void)w;
+        if (write(g_i2c_fd, chunk, n + 1) != (ssize_t)(n + 1)) {
+            return false;
+        }
         offset += n;
     }
+    return true;
 }
 
 static void oled_flush(void) {
@@ -259,24 +273,20 @@ static void oled_flush(void) {
         if (oled_init_hw() < 0) return;
     }
 
-    // Fast path: skip both SHM write and I2C transfer if no pixel changed
+    // Fast path: skip I2C transfer if no pixel changed
     if (g_has_flushed && memcmp(g_oled_buf, g_last_flushed, OLED_BUF_SIZE) == 0) {
         return;
     }
 
-    // Save shared-memory copy for preview/inspection when pixels change
-    int shm_fd = open(SHM_FB_PATH, O_WRONLY | O_CREAT | O_TRUNC, 0666);
-    if (shm_fd >= 0) {
-        ssize_t w = write(shm_fd, g_oled_buf, OLED_BUF_SIZE);
-        (void)w;
-        close(shm_fd);
-    }
-
     if (!g_has_flushed) {
-        oled_set_window(0, OLED_WIDTH - 1, 0, (OLED_HEIGHT / 8) - 1);
-        oled_send_data(g_oled_buf, OLED_BUF_SIZE);
-        memcpy(g_last_flushed, g_oled_buf, OLED_BUF_SIZE);
-        g_has_flushed = true;
+        if (oled_set_window(0, OLED_WIDTH - 1, 0, (OLED_HEIGHT / 8) - 1) &&
+            oled_send_data(g_oled_buf, OLED_BUF_SIZE)) {
+            memcpy(g_last_flushed, g_oled_buf, OLED_BUF_SIZE);
+            g_has_flushed = true;
+        } else {
+            close(g_i2c_fd);
+            g_i2c_fd = -1;
+        }
         return;
     }
 
@@ -316,13 +326,17 @@ static void oled_flush(void) {
     int bbox_bytes = bbox_w * bbox_p;
     int cost_bbox = 7 + bbox_bytes + ((bbox_bytes + 63) / 64);
 
+    bool ok = true;
     if (cost_spans <= cost_bbox) {
         // Transmit only the changed column span on each dirty page
         for (int p = global_min_p; p <= global_max_p; p++) {
             if (p_max_x[p] >= p_min_x[p]) {
                 int span_len = p_max_x[p] - p_min_x[p] + 1;
-                oled_set_window((uint8_t)p_min_x[p], (uint8_t)p_max_x[p], (uint8_t)p, (uint8_t)p);
-                oled_send_data(&g_oled_buf[p * OLED_WIDTH + p_min_x[p]], span_len);
+                if (!oled_set_window((uint8_t)p_min_x[p], (uint8_t)p_max_x[p], (uint8_t)p, (uint8_t)p) ||
+                    !oled_send_data(&g_oled_buf[p * OLED_WIDTH + p_min_x[p]], span_len)) {
+                    ok = false;
+                    break;
+                }
             }
         }
     } else {
@@ -333,11 +347,17 @@ static void oled_flush(void) {
             memcpy(&sub_buf[idx], &g_oled_buf[p * OLED_WIDTH + global_min_x], bbox_w);
             idx += bbox_w;
         }
-        oled_set_window((uint8_t)global_min_x, (uint8_t)global_max_x, (uint8_t)global_min_p, (uint8_t)global_max_p);
-        oled_send_data(sub_buf, idx);
+        if (!oled_set_window((uint8_t)global_min_x, (uint8_t)global_max_x, (uint8_t)global_min_p, (uint8_t)global_max_p) ||
+            !oled_send_data(sub_buf, idx)) {
+            ok = false;
+        }
     }
 
-    memcpy(g_last_flushed, g_oled_buf, OLED_BUF_SIZE);
+    if (ok) {
+        memcpy(g_last_flushed, g_oled_buf, OLED_BUF_SIZE);
+    } else {
+        g_has_flushed = false;
+    }
 }
 
 // ============================================================================
@@ -441,6 +461,15 @@ static TextSlot g_text_slots[MAX_TEXT_SLOTS];
 
 static void reset_text_slots(void) {
     memset(g_text_slots, 0, sizeof(g_text_slots));
+}
+
+static bool any_text_animating(void) {
+    for (int i = 0; i < MAX_TEXT_SLOTS; i++) {
+        if (g_text_slots[i].used && g_text_slots[i].anim_step < TEXT_ANIM_STEPS) {
+            return true;
+        }
+    }
+    return false;
 }
 
 static void step_text_slots(void) {
@@ -672,25 +701,34 @@ static float get_cpu_temp(void) {
 }
 
 static void get_ram_info(char *pct_out, size_t pct_sz, char *tot_out, size_t tot_sz) {
-    uint64_t total_ram = 0, total_free = 0;
-    FILE *fp = fopen("/proc/meminfo", "r");
-    if (fp) {
-        char line[128];
-        while (fgets(line, sizeof(line), fp)) {
-            uint64_t val = 0;
-            if (sscanf(line, "MemTotal: %llu", (unsigned long long *)&val) == 1) total_ram = val;
-            else if (sscanf(line, "MemFree: %llu", (unsigned long long *)&val) == 1) total_free += val;
-            else if (sscanf(line, "Buffers: %llu", (unsigned long long *)&val) == 1) total_free += val;
-            else if (sscanf(line, "Cached: %llu", (unsigned long long *)&val) == 1) total_free += val;
+    if (g_mem_fd < 0) {
+        g_mem_fd = open("/proc/meminfo", O_RDONLY | O_CLOEXEC);
+    }
+    uint64_t total_ram = 0, avail_ram = 0, free_plus_cache = 0;
+    if (g_mem_fd >= 0) {
+        char buf[1024];
+        ssize_t n = pread(g_mem_fd, buf, sizeof(buf) - 1, 0);
+        if (n > 0) {
+            buf[n] = '\0';
+            char *saveptr = NULL;
+            for (char *line = strtok_r(buf, "\n", &saveptr); line; line = strtok_r(NULL, "\n", &saveptr)) {
+                unsigned long long val = 0;
+                if (sscanf(line, "MemTotal: %llu", &val) == 1) total_ram = val;
+                else if (sscanf(line, "MemAvailable: %llu", &val) == 1) avail_ram = val;
+                else if (sscanf(line, "MemFree: %llu", &val) == 1) free_plus_cache += val;
+                else if (sscanf(line, "Buffers: %llu", &val) == 1) free_plus_cache += val;
+                else if (sscanf(line, "Cached: %llu", &val) == 1) free_plus_cache += val;
+            }
         }
-        fclose(fp);
     }
     if (total_ram == 0) {
         snprintf(pct_out, pct_sz, "0%%");
         snprintf(tot_out, tot_sz, "0GB");
         return;
     }
-    int pct = (int)(100ULL * total_free / total_ram);
+    uint64_t effective_free = (avail_ram > 0) ? avail_ram : free_plus_cache;
+    if (effective_free > total_ram) effective_free = total_ram;
+    int pct = (int)((100ULL * effective_free + (total_ram / 2)) / total_ram);
     int gb = (int)((total_ram + 512ULL * 1024ULL) >> 20);
     snprintf(pct_out, pct_sz, "%d%%", pct);
     snprintf(tot_out, tot_sz, "%dGB", gb);
@@ -711,7 +749,7 @@ static void format_kbstr(uint64_t kbval, char *out, size_t out_sz) {
 
 static void get_ip_addr(char *out, size_t out_sz) {
     snprintf(out, out_sz, "N/A");
-    int sock = socket(AF_INET, SOCK_DGRAM, 0);
+    int sock = socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0);
     if (sock >= 0) {
         struct sockaddr_in remote;
         memset(&remote, 0, sizeof(remote));
@@ -731,7 +769,7 @@ static void get_ip_addr(char *out, size_t out_sz) {
 
 static int list_raid(RaidItem *items, int max_items, char member_disks[16][16], int *member_count) {
     if (member_count) *member_count = 0;
-    FILE *fp = fopen("/proc/mdstat", "r");
+    FILE *fp = fopen("/proc/mdstat", "re");
     if (!fp) return 0;
 
     int count = 0;
@@ -778,6 +816,23 @@ static int list_raid(RaidItem *items, int max_items, char member_disks[16][16], 
     return count;
 }
 
+static void strip_partition_suffix(char *base) {
+    size_t blen = strlen(base);
+    if ((strncmp(base, "sd", 2) == 0 || strncmp(base, "hd", 2) == 0 || strncmp(base, "vd", 2) == 0) && blen > 3) {
+        while (blen > 3 && base[blen - 1] >= '0' && base[blen - 1] <= '9') {
+            base[--blen] = '\0';
+        }
+    } else if ((strncmp(base, "nvme", 4) == 0 || strncmp(base, "mmcblk", 6) == 0) && blen > 4) {
+        size_t orig = blen;
+        while (blen > 2 && base[blen - 1] >= '0' && base[blen - 1] <= '9') {
+            blen--;
+        }
+        if (blen < orig && base[blen - 1] == 'p' && base[blen - 2] >= '0' && base[blen - 2] <= '9') {
+            base[blen - 1] = '\0';
+        }
+    }
+}
+
 static int list_storage(StorageItem *items, int max_items) {
     RaidItem raids[4];
     char raid_members[16][16];
@@ -796,7 +851,7 @@ static int list_storage(StorageItem *items, int max_items) {
     char seen_parts[32][64];
     int seen_count = 0;
 
-    FILE *fp = fopen("/proc/mounts", "r");
+    FILE *fp = fopen("/proc/mounts", "re");
     if (!fp) return 0;
 
     char line[512];
@@ -804,7 +859,7 @@ static int list_storage(StorageItem *items, int max_items) {
         char spec[64], mnt[128], fstype[32];
         if (sscanf(line, "%63s %127s %31s", spec, mnt, fstype) != 3) continue;
         if (strncmp(spec, "/dev/", 5) != 0) continue;
-        if (strncmp(spec, "/dev/loop", 9) == 0 || strncmp(spec, "/dev/ram", 8) == 0) continue;
+        if (strncmp(spec, "/dev/loop", 9) == 0 || strncmp(spec, "/dev/ram", 8) == 0 || strncmp(spec, "/dev/zram", 9) == 0) continue;
 
         const char *part = spec + 5;
         bool already = false;
@@ -827,13 +882,9 @@ static int list_storage(StorageItem *items, int max_items) {
         if (statvfs(mnt, &vfs) != 0 || vfs.f_blocks == 0) continue;
 
         uint64_t total_kb = ((uint64_t)vfs.f_blocks * (uint64_t)vfs.f_frsize) >> 10;
-        uint64_t avail_kb = ((uint64_t)vfs.f_bavail * (uint64_t)vfs.f_frsize) >> 10;
         uint64_t free_kb  = ((uint64_t)vfs.f_bfree  * (uint64_t)vfs.f_frsize) >> 10;
         uint64_t used_kb  = (total_kb >= free_kb) ? (total_kb - free_kb) : 0;
-        (void)avail_kb;
 
-        // Strip partition suffix just like argonsysinfo.py:
-        // sdX1 -> sdX, hdX1 -> hdX, nvme0n1p1 -> nvme0n1, mmcblk0p1 -> mmcblk0
         char base[64];
         snprintf(base, sizeof(base), "%s", part);
         bool is_raid_dev = false;
@@ -841,14 +892,7 @@ static int list_storage(StorageItem *items, int max_items) {
             if (strcmp(base, raids[i].title) == 0) { is_raid_dev = true; break; }
         }
         if (!is_raid_dev) {
-            size_t blen = strlen(base);
-            if ((strncmp(base, "sd", 2) == 0 || strncmp(base, "hd", 2) == 0) && blen > 2) {
-                while (blen > 3 && base[blen - 1] >= '0' && base[blen - 1] <= '9') {
-                    base[--blen] = '\0';
-                }
-            } else if (blen > 2) {
-                base[blen - 2] = '\0';
-            }
+            strip_partition_suffix(base);
         }
 
         int found = -1;
@@ -892,7 +936,7 @@ static void trim_str(char *s) {
 }
 
 static void parse_oled_conf_file(const char *path, LegacyConfig *cfg) {
-    FILE *fp = fopen(path, "r");
+    FILE *fp = fopen(path, "re");
     if (!fp) return;
     char line[256];
     while (fgets(line, sizeof(line), fp)) {
@@ -908,9 +952,11 @@ static void parse_oled_conf_file(const char *path, LegacyConfig *cfg) {
         trim_str(val);
 
         if (strcmp(key, "switchduration") == 0) {
-            cfg->switch_duration = atoi(val);
+            int v = atoi(val);
+            if (v >= 0 && v <= 3600) cfg->switch_duration = v;
         } else if (strcmp(key, "screensaver") == 0) {
-            cfg->screensaver_sec = atoi(val);
+            int v = atoi(val);
+            if (v >= 0 && v <= 86400) cfg->screensaver_sec = v;
         } else if (strcmp(key, "refreshinterval") == 0) {
             int sec = atoi(val);
             if (sec >= 1 && sec <= 60) cfg->refresh_ms = sec * 1000;
@@ -927,20 +973,20 @@ static void parse_oled_conf_file(const char *path, LegacyConfig *cfg) {
     fclose(fp);
 }
 
-static void reload_config_if_needed(bool force) {
+static bool reload_config_if_needed(bool force) {
     struct stat st1, st2, stu;
     time_t m1 = (stat("/etc/argononeoled.conf", &st1) == 0) ? st1.st_mtime : 0;
     time_t m2 = (stat("/etc/argoneonoled.conf", &st2) == 0) ? st2.st_mtime : 0;
     time_t mu = (stat("/etc/argonunits.conf",   &stu) == 0) ? stu.st_mtime : 0;
 
     if (!force && m1 == g_cfg.conf1_mtime && m2 == g_cfg.conf2_mtime && mu == g_cfg.unit_mtime) {
-        return;
+        return false;
     }
 
     g_cfg.enabled = true;
     g_cfg.switch_duration = 10;
     g_cfg.screensaver_sec = 120;
-    g_cfg.refresh_ms = 1000; // Fast 1s live refresh!
+    g_cfg.refresh_ms = 1000; // Default: 1s calm numeric refresh
     g_cfg.temp_unit = 'C';
 
     const char *default_screens[] = { "clock", "cpu", "storage", "ram", "temp", "ip" };
@@ -964,7 +1010,7 @@ static void reload_config_if_needed(bool force) {
         parse_oled_conf_file("/etc/argoneonoled.conf", &g_cfg);
     }
 
-    FILE *ufp = fopen("/etc/argonunits.conf", "r");
+    FILE *ufp = fopen("/etc/argonunits.conf", "re");
     if (ufp) {
         char line[128];
         while (fgets(line, sizeof(line), ufp)) {
@@ -985,6 +1031,7 @@ static void reload_config_if_needed(bool force) {
     g_cfg.conf1_mtime = m1;
     g_cfg.conf2_mtime = m2;
     g_cfg.unit_mtime = mu;
+    return true;
 }
 
 // ============================================================================
@@ -992,6 +1039,7 @@ static void reload_config_if_needed(bool force) {
 // ============================================================================
 static bool render_card(const char *screen_name, int page_subidx, int *out_pages) {
     if (out_pages) *out_pages = 1;
+    uint64_t refresh_iv = (g_cfg.refresh_ms >= 500) ? (uint64_t)g_cfg.refresh_ms : 1000ULL;
 
     if (strcmp(screen_name, "cpu") == 0) {
         oled_loadbg("bgcpu");
@@ -1014,7 +1062,7 @@ static bool render_card(const char *screen_name, int page_subidx, int *out_pages
         static int cached_total = 0;
         static uint64_t last_storage_ms = 0;
         uint64_t now_ms = get_monotonic_ms();
-        if (last_storage_ms == 0 || (now_ms - last_storage_ms) >= 1000ULL) {
+        if (last_storage_ms == 0 || (now_ms - last_storage_ms) >= refresh_iv) {
             cached_total = list_storage(cached_items, 12);
             last_storage_ms = now_ms;
         }
@@ -1046,7 +1094,7 @@ static bool render_card(const char *screen_name, int page_subidx, int *out_pages
         static int cached_raids_cnt = 0;
         static uint64_t last_raid_ms = 0;
         uint64_t now_ms = get_monotonic_ms();
-        if (last_raid_ms == 0 || (now_ms - last_raid_ms) >= 1000ULL) {
+        if (last_raid_ms == 0 || (now_ms - last_raid_ms) >= refresh_iv) {
             cached_raids_cnt = list_raid(cached_raids, 4, NULL, NULL);
             last_raid_ms = now_ms;
         }
@@ -1084,7 +1132,7 @@ static bool render_card(const char *screen_name, int page_subidx, int *out_pages
         static char cached_tot[16] = "0GB";
         static uint64_t last_ram_ms = 0;
         uint64_t now_ms = get_monotonic_ms();
-        if (last_ram_ms == 0 || (now_ms - last_ram_ms) >= 1000ULL) {
+        if (last_ram_ms == 0 || (now_ms - last_ram_ms) >= refresh_iv) {
             get_ram_info(cached_pct, sizeof(cached_pct), cached_tot, sizeof(cached_tot));
             last_ram_ms = now_ms;
         }
@@ -1124,7 +1172,7 @@ static bool render_card(const char *screen_name, int page_subidx, int *out_pages
         static char cached_ip[32] = "N/A";
         static uint64_t last_ip_ms = 0;
         uint64_t now_ms = get_monotonic_ms();
-        if (last_ip_ms == 0 || (now_ms - last_ip_ms) >= 1000ULL) {
+        if (last_ip_ms == 0 || (now_ms - last_ip_ms) >= refresh_iv) {
             get_ip_addr(cached_ip, sizeof(cached_ip));
             last_ip_ms = now_ms;
         }
@@ -1172,14 +1220,6 @@ static bool render_card(const char *screen_name, int page_subidx, int *out_pages
 // ============================================================================
 // GPIO4 Power & Page Switch Button Monitor Thread (libgpiod v2)
 // ============================================================================
-static void log_button_event(const char *msg, uint64_t val) {
-    FILE *fp = fopen("/dev/shm/argon_button_debug.log", "a");
-    if (fp) {
-        fprintf(fp, "[%llu ms] %s (%llu)\n", (unsigned long long)get_monotonic_ms(), msg, (unsigned long long)val);
-        fclose(fp);
-    }
-}
-
 static void *button_monitor_thread(void *arg) {
     (void)arg;
     const char *chips[] = { "/dev/gpiochip4", "/dev/gpiochip0" };
@@ -1232,7 +1272,6 @@ static void *button_monitor_thread(void *arg) {
                 if (type == GPIOD_EDGE_EVENT_FALLING_EDGE) {
                     // Button pressed down (active-low: HIGH -> LOW)
                     press_start_ms = now_ms;
-                    log_button_event("FALLING_EDGE (press)", now_ms);
                     if (g_oledswitch_only && (now_ms - last_switch_trig_ms) >= 150ULL) {
                         g_oled_switch_req = 1;
                         last_switch_trig_ms = now_ms;
@@ -1242,7 +1281,6 @@ static void *button_monitor_thread(void *arg) {
                     uint64_t duration_ms = (press_start_ms > 0 && now_ms >= press_start_ms)
                                            ? (now_ms - press_start_ms) : 0;
                     press_start_ms = 0;
-                    log_button_event("RISING_EDGE (release)", duration_ms);
                     if (!g_oledswitch_only) {
                         if (duration_ms >= 15 && duration_ms <= 35) {
                             g_reboot_req = 1;
@@ -1266,10 +1304,10 @@ static void *button_monitor_thread(void *arg) {
 }
 
 static void argon_mcu_signal_poweroff(void) {
-    int fd = open("/dev/i2c-1", O_RDWR);
-    if (fd < 0) fd = open("/dev/i2c-0", O_RDWR);
+    int fd = open("/dev/i2c-1", O_RDWR | O_CLOEXEC);
+    if (fd < 0) fd = open("/dev/i2c-0", O_RDWR | O_CLOEXEC);
     if (fd < 0) return;
-    if (ioctl(fd, I2C_SLAVE, 0x1A) == 0) {
+    if (ioctl(fd, I2C_SLAVE, FAN_I2C_ADDR) == 0) {
         // Send register-based poweroff (0x86 = 1) and legacy 0xFF poweroff
         uint8_t cmd_reg[2] = { 0x86, 0x01 };
         if (write(fd, cmd_reg, 2) < 0) {
@@ -1288,10 +1326,11 @@ int main(int argc, char **argv) {
     if (argc > 1) {
         if (strcasecmp(argv[1], "SHUTDOWN") == 0 || strcasecmp(argv[1], "--shutdown") == 0 || strcasecmp(argv[1], "FANOFF") == 0) {
             if (strcasecmp(argv[1], "SHUTDOWN") == 0 || strcasecmp(argv[1], "--shutdown") == 0) {
-                FILE *fp = fopen(SHUTDOWN_FLAGFILE, "w");
-                if (fp) {
-                    fputs("signalled", fp);
-                    fclose(fp);
+                int flag_fd = open(SHUTDOWN_FLAGFILE, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW | O_CLOEXEC, 0600);
+                if (flag_fd >= 0) {
+                    ssize_t w = write(flag_fd, "signalled\n", 10);
+                    (void)w;
+                    close(flag_fd);
                 }
                 argon_mcu_signal_poweroff();
             }
@@ -1334,14 +1373,17 @@ int main(int argc, char **argv) {
 
     int screen_id = 0;
     int page_subidx = 0;
+    int current_total_subpages = 1;
     bool screensaver_mode = false;
+    bool need_render = true;
     uint64_t last_switch_ms = get_monotonic_ms();
     uint64_t screensaver_start_ms = last_switch_ms;
     uint64_t last_telemetry_ms = 0;
     uint64_t last_digits_ms = 0;
+    uint64_t last_clock_tick_ms = 0;
     float live_temp = g_cur_temp;
 
-    // 30 Hz (33.33 ms) Render & Partial-Flush Loop
+    // 30 Hz (33.33 ms) Render & Partial-Flush Loop with Idle-Frame Skipping
     while (g_running) {
         uint64_t frame_start_ms = get_monotonic_ms();
 
@@ -1349,14 +1391,14 @@ int main(int argc, char **argv) {
             break;
         }
 
-        reload_config_if_needed(false);
+        if (reload_config_if_needed(false)) {
+            need_render = true;
+        }
 
         // Handle button press (OLEDSWITCH) immediately (<33ms response)
         if (g_oled_switch_req) {
             g_oled_switch_req = 0;
-            if (screensaver_mode) {
-                screensaver_mode = false;
-            }
+            screensaver_mode = false;
             screen_id++;
             page_subidx = 0;
             if (g_cfg.screen_count > 0 && screen_id >= g_cfg.screen_count) {
@@ -1365,6 +1407,7 @@ int main(int argc, char **argv) {
             reset_text_slots();
             screensaver_start_ms = frame_start_ms;
             last_switch_ms = frame_start_ms;
+            need_render = true;
         }
 
         if (!g_cfg.enabled || g_cfg.screen_count == 0) {
@@ -1379,10 +1422,8 @@ int main(int argc, char **argv) {
 
         // Check auto-switch duration
         if (g_cfg.switch_duration > 0 && (frame_start_ms - last_switch_ms) >= (uint64_t)g_cfg.switch_duration * 1000ULL) {
-            int total_subpages = 1;
-            render_card(g_cfg.screen_list[screen_id], page_subidx, &total_subpages);
             page_subidx++;
-            if (page_subidx >= total_subpages) {
+            if (page_subidx >= current_total_subpages) {
                 page_subidx = 0;
                 screen_id = (screen_id + 1) % g_cfg.screen_count;
             }
@@ -1390,6 +1431,7 @@ int main(int argc, char **argv) {
             last_switch_ms = frame_start_ms;
             screensaver_start_ms = frame_start_ms;
             screensaver_mode = false;
+            need_render = true;
         }
 
         // Check screensaver timeout
@@ -1402,6 +1444,8 @@ int main(int argc, char **argv) {
         }
 
         if (!screensaver_mode) {
+            uint64_t refresh_iv = (g_cfg.refresh_ms >= 500) ? (uint64_t)g_cfg.refresh_ms : 1000ULL;
+
             // Query CPU & temperature 4x per second (every 250ms) for smooth bar targets
             if (last_telemetry_ms == 0 || (frame_start_ms - last_telemetry_ms) >= 250ULL) {
                 update_cpu_usage();
@@ -1409,38 +1453,70 @@ int main(int argc, char **argv) {
                 last_telemetry_ms = frame_start_ms;
             }
 
-            // Update numeric text digits only 1x per second (every 1000ms)
-            if (last_digits_ms == 0 || (frame_start_ms - last_digits_ms) >= 1000ULL) {
+            // Update numeric text digits at configured refresh interval (default 1000ms)
+            if (last_digits_ms == 0 || (frame_start_ms - last_digits_ms) >= refresh_iv) {
                 for (int i = 0; i < MAX_CORES; i++) {
                     g_core_usage[i] = (int)(g_live_core[i] + 0.5f);
                 }
                 g_cur_temp = live_temp;
                 last_digits_ms = frame_start_ms;
+                need_render = true;
+            }
+
+            // Trigger 500ms (2 Hz) check when on the clock card
+            if (screen_id < g_cfg.screen_count && strcmp(g_cfg.screen_list[screen_id], "clock") == 0) {
+                if (last_clock_tick_ms == 0 || (frame_start_ms - last_clock_tick_ms) >= 500ULL) {
+                    last_clock_tick_ms = frame_start_ms;
+                    need_render = true;
+                }
             }
 
             // 30 Hz fluid bar animation (glides smoothly across all 30 frames/sec)
+            bool bar_moving = false;
             for (int i = 0; i < MAX_CORES; i++) {
-                g_smooth_core[i] += (g_live_core[i] - g_smooth_core[i]) * 0.14f;
-            }
-            g_smooth_temp += (live_temp - g_smooth_temp) * 0.14f;
-
-            // Render active card at 30 Hz & transmit only dirty pixels over I2C
-            int tries = 0;
-            int total_subpages = 1;
-            while (tries < g_cfg.screen_count) {
-                if (screen_id >= g_cfg.screen_count) screen_id = 0;
-                if (render_card(g_cfg.screen_list[screen_id], page_subidx, &total_subpages)) {
-                    break;
+                float diff = g_live_core[i] - g_smooth_core[i];
+                if (fabsf(diff) > 0.15f) {
+                    g_smooth_core[i] += diff * 0.14f;
+                    bar_moving = true;
+                } else {
+                    g_smooth_core[i] = g_live_core[i];
                 }
-                screen_id = (screen_id + 1) % g_cfg.screen_count;
-                page_subidx = 0;
-                reset_text_slots();
-                tries++;
+            }
+            float tdiff = live_temp - g_smooth_temp;
+            if (fabsf(tdiff) > 0.10f) {
+                g_smooth_temp += tdiff * 0.14f;
+                bar_moving = true;
+            } else {
+                g_smooth_temp = live_temp;
             }
 
-            step_text_slots();
-            oled_power(true);
-            oled_flush();
+            const char *cur_scr = (screen_id < g_cfg.screen_count) ? g_cfg.screen_list[screen_id] : "clock";
+            if (bar_moving && (strcmp(cur_scr, "cpu") == 0 || strcmp(cur_scr, "temp") == 0)) {
+                need_render = true;
+            }
+            if (any_text_animating()) {
+                need_render = true;
+            }
+
+            // Only render & flush when pixels or animations are active (0% CPU in static idle frames)
+            if (need_render || !g_has_flushed) {
+                int tries = 0;
+                while (tries < g_cfg.screen_count) {
+                    if (screen_id >= g_cfg.screen_count) screen_id = 0;
+                    if (render_card(g_cfg.screen_list[screen_id], page_subidx, &current_total_subpages)) {
+                        break;
+                    }
+                    screen_id = (screen_id + 1) % g_cfg.screen_count;
+                    page_subidx = 0;
+                    reset_text_slots();
+                    tries++;
+                }
+
+                step_text_slots();
+                oled_power(true);
+                oled_flush();
+                need_render = any_text_animating();
+            }
         }
 
         uint64_t elapsed_ms = get_monotonic_ms() - frame_start_ms;
@@ -1449,22 +1525,25 @@ int main(int argc, char **argv) {
         }
     }
 
-    // Clean shutdown of OLED
+    // Clean shutdown of OLED & open file descriptors
     oled_clearbuffer(0);
     oled_flush();
     oled_power(false);
     if (g_i2c_fd >= 0) close(g_i2c_fd);
+    if (g_stat_fd >= 0) close(g_stat_fd);
+    if (g_temp_fd >= 0) close(g_temp_fd);
+    if (g_mem_fd >= 0)  close(g_mem_fd);
 
     if (has_btn_thread) {
         pthread_join(btn_tid, NULL);
     }
 
     if (g_reboot_req) {
-        int r = system("systemctl reboot");
-        (void)r;
+        execl("/usr/bin/systemctl", "systemctl", "reboot", (char *)NULL);
+        execl("/bin/systemctl", "systemctl", "reboot", (char *)NULL);
     } else if (g_shutdown_req) {
-        int r = system("systemctl poweroff");
-        (void)r;
+        execl("/usr/bin/systemctl", "systemctl", "poweroff", (char *)NULL);
+        execl("/bin/systemctl", "systemctl", "poweroff", (char *)NULL);
     }
 
     return 0;

@@ -1,5 +1,5 @@
 Package: argon-one-v5-oled-legacy
-Version: 1.2.0
+Version: 1.2.1
 Section: utils
 Priority: optional
 Architecture: arm64

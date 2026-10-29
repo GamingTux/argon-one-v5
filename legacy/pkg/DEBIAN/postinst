@@ -12,6 +12,11 @@ if [ -f "$CONFIG" ]; then
     if grep -q "^#dtparam=i2c_arm=on" "$CONFIG"; then
         sed -i 's/^#dtparam=i2c_arm=on/dtparam=i2c_arm=on/' "$CONFIG"
     elif ! grep -q "^dtparam=i2c_arm=on" "$CONFIG"; then
+        last_sec=$(grep "^\[.*\]" "$CONFIG" | tail -n 1 || true)
+        if [ "$last_sec" != "[all]" ]; then
+            echo "" >> "$CONFIG"
+            echo "[all]" >> "$CONFIG"
+        fi
         echo "dtparam=i2c_arm=on" >> "$CONFIG"
     fi
 fi
@@ -47,10 +52,13 @@ screenlist="clock cpu storage ram temp ip"
 EOF
 fi
 
-# 4. Install original .bin assets to /etc/argon/oled if not present
+# 4. Install original .bin assets to /etc/argon/oled if not present & clean up unused fonts
 mkdir -p /etc/argon/oled
+rm -f /etc/argon/oled/font16x12.bin /etc/argon/oled/font24x16.bin /etc/argon/oled/font32x24.bin /etc/argon/oled/font48x32.bin /etc/argon/oled/font64x48.bin
+rm -f /dev/shm/argon_button_debug.log /dev/shm/argonshutdownflag.txt /dev/shm/argon_oled_fb.bin
 if [ -d /usr/share/argon-1v5-oled-legacy/oled ]; then
     for f in /usr/share/argon-1v5-oled-legacy/oled/*.bin; do
+        [ -e "$f" ] || continue
         base=$(basename "$f")
         if [ ! -f "/etc/argon/oled/$base" ]; then
             cp "$f" "/etc/argon/oled/$base"

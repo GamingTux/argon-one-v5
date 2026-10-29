@@ -1,4 +1,10 @@
 #!/bin/bash
 set -e
+
+if [ "$1" = "purge" ]; then
+    rm -f /etc/argononeoled.conf /etc/argoneonoled.conf /run/argon-oled-shutdown.flag
+    rm -rf /etc/argon/oled
+fi
+
 systemctl daemon-reload 2>/dev/null || true
 exit 0

@@ -7,7 +7,9 @@ Type=simple
 Restart=always
 RestartSec=2
 ExecStart=/usr/bin/argon-1v5-oled-legacy SERVICE OLEDSWITCH
-ExecStop=/usr/bin/argon-1v5-oled-legacy SHUTDOWN
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=true
 
 [Install]
 WantedBy=multi-user.target

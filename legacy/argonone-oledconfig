@@ -1,26 +1,30 @@
 #!/bin/bash
 
+if [ "$(id -u)" -ne 0 ]; then
+	exec sudo "$0" "$@"
+fi
+
 oledconfigfile=/etc/argononeoled.conf
 eonconfigfile=/etc/argoneonoled.conf
 
 get_number () {
-	read curnumber
+	read -r curnumber
 	if [ -z "$curnumber" ]
 	then
 		echo "-2"
 		return
 	elif [[ $curnumber =~ ^[+-]?[0-9]+$ ]]
 	then
-		if [ $curnumber -lt 0 ]
+		if [ "$curnumber" -lt 0 ]
 		then
 			echo "-1"
 			return
-		elif [ $curnumber -gt 3600 ]
+		elif [ "$curnumber" -gt 3600 ]
 		then
 			echo "-1"
 			return
 		fi
-		echo $curnumber
+		echo "$curnumber"
 		return
 	fi
 	echo "-1"
@@ -69,7 +73,7 @@ configure_pagelist () {
 		i=1
 		for curpage in $newscreenlist
 		do
-			get_pagename $curpage
+			get_pagename "$curpage"
 			echo "  $i. Remove $pagename"
 			i=$((i+1))
 		done
@@ -84,7 +88,7 @@ configure_pagelist () {
 		echo -n "Enter Number (0-$i):"
 
 		cmdmode=$( get_number )
-		if [ $cmdmode -eq 0 ]
+		if [ "$cmdmode" -eq 0 ]
 		then
 			pageloopflag=0
 		elif [[ $cmdmode -eq $i ]]
@@ -96,21 +100,21 @@ configure_pagelist () {
 			i=1
 			for curpage in $pagemasterlist
 			do
-				get_pagename $curpage
+				get_pagename "$curpage"
 				echo "  $i. $pagename"
 				i=$((i+1))
 			done
 
 			echo
 			echo "  0. Cancel"
-			echo -n "Enter Number (0-$i):"
+			echo -n "Enter Number (0-$((i-1))):"
 			pagenum=$( get_number )
-			if [[ $pagenum -ge 1 && $pagenum -le $i ]]
+			if [[ $pagenum -ge 1 && $pagenum -lt $i ]]
 			then
 				i=1
 				for curpage in $pagemasterlist
 				do
-					if [ $i -eq $pagenum ]
+					if [ $i -eq "$pagenum" ]
 					then
 						if [ "$newscreenlist" == "" ]
 						then
@@ -128,7 +132,7 @@ configure_pagelist () {
 			i=1
 			for curpage in $newscreenlist
 			do
-				if [ ! $i -eq $cmdmode ]
+				if [ ! $i -eq "$cmdmode" ]
 				then
 					tmpscreenlist="$tmpscreenlist $curpage"
 				fi
@@ -136,7 +140,7 @@ configure_pagelist () {
 			done
 			if [ "$tmpscreenlist" == "" ]
 			then
-				newscreenlist="$tmpscreenlist"
+				newscreenlist=""
 			else
 				newscreenlist="${tmpscreenlist:1}"
 			fi
@@ -144,17 +148,39 @@ configure_pagelist () {
 	done
 }
 
+loadconfig_safe () {
+	local cfg="$1"
+	[ -f "$cfg" ] || return
+	local val
+	val=$(grep -E '^[[:space:]]*enabled=' "$cfg" | tail -n 1 | cut -d= -f2- | tr -d '"\r\n \t')
+	[ -n "$val" ] && enabled="$val"
+	val=$(grep -E '^[[:space:]]*switchduration=' "$cfg" | tail -n 1 | cut -d= -f2- | tr -d '"\r\n \t')
+	[[ "$val" =~ ^[0-9]+$ ]] && switchduration="$val"
+	val=$(grep -E '^[[:space:]]*screensaver=' "$cfg" | tail -n 1 | cut -d= -f2- | tr -d '"\r\n \t')
+	[[ "$val" =~ ^[0-9]+$ ]] && screensaver="$val"
+	val=$(grep -E '^[[:space:]]*refreshinterval=' "$cfg" | tail -n 1 | cut -d= -f2- | tr -d '"\r\n \t')
+	[[ "$val" =~ ^[0-9]+$ ]] && refreshinterval="$val"
+	if grep -qE '^[[:space:]]*screenlist=' "$cfg"; then
+		val=$(grep -E '^[[:space:]]*screenlist=' "$cfg" | tail -n 1 | cut -d= -f2- | tr -d '"\r\n')
+		screenlist="$val"
+	fi
+}
+
 saveconfig () {
-	for f in "$oledconfigfile" "$eonconfigfile"; do
-		echo "#" > "$f"
-		echo "# Argon ONE V5 Legacy OLED Configuration" >> "$f"
-		echo "#" >> "$f"
-		echo "enabled=$1" >> "$f"
-		echo "switchduration=$2" >> "$f"
-		echo "screensaver=$3" >> "$f"
-		echo "refreshinterval=$4" >> "$f"
-		echo "screenlist=\"$5\"" >> "$f"
-	done
+	cat << EOF > "$oledconfigfile"
+#
+# Argon ONE V5 Legacy OLED Configuration
+#
+enabled=$1
+switchduration=$2
+screensaver=$3
+refreshinterval=$4
+screenlist="$5"
+EOF
+	chmod 644 "$oledconfigfile"
+	if [ -f "$eonconfigfile" ]; then
+		cp -f "$oledconfigfile" "$eonconfigfile"
+	fi
 }
 
 updateconfig=1
@@ -163,7 +189,7 @@ while [ $oledloopflag -eq 1 ]
 do
 	if [ $updateconfig -eq 1 ]
 	then
-		[ -f "$oledconfigfile" ] && . "$oledconfigfile"
+		loadconfig_safe "$oledconfigfile"
 	fi
 
 	updateconfig=0
@@ -175,12 +201,12 @@ do
 
 	if [ $updateconfig -eq 1 ]
 	then
-		saveconfig $enabled $switchduration $screensaver $refreshinterval "$screenlist"
+		saveconfig "$enabled" "$switchduration" "$screensaver" "$refreshinterval" "$screenlist"
 		updateconfig=0
 	fi
 
 	displaystring=": Manually"
-	if [ $switchduration -gt 1 ]
+	if [ "$switchduration" -gt 1 ]
 	then
 		displaystring="Every $switchduration secs"
 	fi
@@ -199,22 +225,22 @@ do
 	echo -n "Enter Number (0-5):"
 
 	newmode=$( get_number )
-	if [ $newmode -eq 0 ]
+	if [ "$newmode" -eq 0 ]
 	then
 		oledloopflag=0
-	elif [ $newmode -eq 1 ]
+	elif [ "$newmode" -eq 1 ]
 	then
 		echo
 		echo -n "Enter # of Seconds (5-60, Manual if 0):"
 		cmdmode=$( get_number )
-		if [ $cmdmode -eq 0 ] || [[ $cmdmode -ge 5 && $cmdmode -le 60 ]]
+		if [ "$cmdmode" -eq 0 ] || [[ $cmdmode -ge 5 && $cmdmode -le 60 ]]
 		then
 			switchduration=$cmdmode
 			updateconfig=1
 		else
 			echo "Invalid duration"
 		fi
-	elif [ $newmode -eq 2 ]
+	elif [ "$newmode" -eq 2 ]
 	then
 		configure_pagelist "$screenlist"
 		if [ ! "$screenlist" == "$newscreenlist" ]
@@ -222,30 +248,30 @@ do
 			screenlist="$newscreenlist"
 			updateconfig=1
 		fi
-	elif [ $newmode -eq 3 ]
+	elif [ "$newmode" -eq 3 ]
 	then
 		echo
 		echo -n "Enter # of Seconds (30 or above, Never if 0):"
 		cmdmode=$( get_number )
-		if [ $cmdmode -eq 0 ] || [ $cmdmode -ge 30 ]
+		if [ "$cmdmode" -eq 0 ] || [ "$cmdmode" -ge 30 ]
 		then
 			screensaver=$cmdmode
 			updateconfig=1
 		else
 			echo "Invalid duration"
 		fi
-	elif [ $newmode -eq 4 ]
+	elif [ "$newmode" -eq 4 ]
 	then
 		echo
 		echo -n "Enable OLED Pages (Y/n)?:"
-		read -n 1 confirm
+		read -r -n 1 confirm
 		echo
 		if [[ "$confirm" == "n" || "$confirm" == "N" ]]; then
 			enabled="N"; updateconfig=1
 		elif [[ "$confirm" == "y" || "$confirm" == "Y" ]]; then
 			enabled="Y"; updateconfig=1
 		fi
-	elif [ $newmode -eq 5 ]
+	elif [ "$newmode" -eq 5 ]
 	then
 		echo
 		echo -n "Enter Live Refresh Interval in Seconds (1-10):"
@@ -261,8 +287,7 @@ do
 
 	if [ $updateconfig -eq 1 ]
 	then
-		saveconfig $enabled $switchduration $screensaver $refreshinterval "$screenlist"
-		sudo systemctl restart argon-1v5-oled-legacy.service 2>/dev/null || true
+		saveconfig "$enabled" "$switchduration" "$screensaver" "$refreshinterval" "$screenlist"
 	fi
 done
 echo

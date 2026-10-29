@@ -3,7 +3,7 @@ CFLAGS ?= -O2 -Wall -Wextra -pthread
 LDFLAGS ?= -pthread -lgpiod -lm
 
 VER_ESSENTIAL ?= 1.2.0
-VER_LEGACY ?= 1.2.0
+VER_LEGACY ?= 1.2.1
 VER_EXPERIMENTAL ?= 1.1.0
 
 DAEMON_SRCS = src/main.c src/ssd1306.c src/font.c src/telemetry.c src/button.c src/config.c
@@ -19,7 +19,7 @@ argon-oled: $(CLI_SRCS)
 	$(CC) $(CFLAGS) $(CLI_SRCS) -o $@
 
 argon-1v5-oled-legacy: $(LEGACY_SRCS) legacy/legacy_assets.h
-	$(CC) $(CFLAGS) $(LEGACY_SRCS) -pthread -lgpiod -o $@
+	$(CC) $(CFLAGS) $(LEGACY_SRCS) -pthread -lgpiod -lm -o $@
 
 clean:
 	rm -f argon-v5-oled argon-oled argon-1v5-oled-legacy
@@ -60,6 +60,7 @@ deb-experimental: deb
 
 deb-legacy: argon-1v5-oled-legacy
 	mkdir -p dist
+	rm -rf legacy/pkg/usr legacy/pkg/etc
 	mkdir -p legacy/pkg/usr/bin legacy/pkg/usr/share/argon-1v5-oled-legacy/oled legacy/pkg/etc/systemd/system legacy/pkg/usr/lib/systemd/system-shutdown
 	cp argon-1v5-oled-legacy legacy/pkg/usr/bin/
 	cp legacy/argonone-oledconfig legacy/pkg/usr/bin/
