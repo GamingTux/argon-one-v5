@@ -1,9 +1,17 @@
-# Argon ONE V5 Safe Storage, PCIe & CPU Governor Optimization
+# Argon ONE V5 Safe Storage, PCIe, Network & Multi-Core Optimization (Distro-Agnostic)
+
 # 1. NVMe I/O Queue & Read-Ahead Optimization
 ACTION=="add|change", KERNEL=="nvme[0-9]*n[0-9]*", ATTR{queue/scheduler}="none", ATTR{queue/read_ahead_kb}="512", ATTR{queue/rq_affinity}="2"
 
-# 2. Prevent PCIe Gen3 ASPM sleep latency spikes
+# 2. MicroSD & USB Storage I/O Queue Optimization
+ACTION=="add|change", KERNEL=="mmcblk[0-9]*|sd[a-z]", ATTR{queue/scheduler}="mq-deadline", ATTR{queue/read_ahead_kb}="256", ATTR{queue/rq_affinity}="2"
+
+# 3. Prevent PCIe Gen3 ASPM sleep latency spikes
 ACTION=="add", SUBSYSTEM=="pci", ATTR{power/control}="on"
 
-# 3. Fast CPU Governor Responsiveness on boot/governor change
-ACTION=="add|change", SUBSYSTEM=="cpu", KERNEL=="cpu0", RUN+="/bin/sh -c 'echo 50 > /sys/devices/system/cpu/cpufreq/ondemand/up_threshold 2>/dev/null; echo 2 > /sys/devices/system/cpu/cpufreq/ondemand/sampling_down_factor 2>/dev/null; echo 1 > /sys/devices/system/cpu/cpufreq/ondemand/io_is_busy 2>/dev/null || true'"
+# 4. Disable Wi-Fi Power-Save (eliminates 100-200ms ping spikes) & Enable 4-Core RPS/RFS on Network Interfaces
+ACTION=="add", SUBSYSTEM=="net", KERNEL=="wlan*", RUN+="/bin/sh -c '/usr/sbin/iw dev %k set power_save off 2>/dev/null || /sbin/iw dev %k set power_save off 2>/dev/null || true'"
+ACTION=="add", SUBSYSTEM=="net", KERNEL=="eth*|wlan*|end*", RUN+="/bin/sh -c 'for q in /sys/class/net/%k/queues/rx-*; do [ -w \"$q/rps_cpus\" ] && echo f > \"$q/rps_cpus\" 2>/dev/null; [ -w \"$q/rps_flow_cnt\" ] && echo 4096 > \"$q/rps_flow_cnt\" 2>/dev/null; done || true'"
+
+# 5. Apply CPU Governor & Multi-Core Hardware IRQ Distribution on Boot
+ACTION=="add|change", SUBSYSTEM=="cpu", KERNEL=="cpu0", RUN+="/usr/bin/argon-v5-essentials --apply-runtime"

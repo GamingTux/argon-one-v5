@@ -2,7 +2,7 @@ CC ?= gcc
 CFLAGS ?= -O2 -Wall -Wextra -pthread
 LDFLAGS ?= -pthread -lgpiod -lm
 
-VER_ESSENTIAL ?= 1.0.0
+VER_ESSENTIAL ?= 1.1.0
 VER_LEGACY ?= 1.2.0
 VER_EXPERIMENTAL ?= 1.1.0
 
