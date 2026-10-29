@@ -1,6 +1,6 @@
 # Argon ONE V5 — Native C Drivers, Case Essentials & OLED Display Suite for Raspberry Pi 5
 
-[![OLED Legacy: v1.2.1 Stable](https://img.shields.io/badge/OLED%20Legacy-v1.2.1%20Stable-brightgreen?style=flat-square)](#-1-argon-one-v5-oled-legacy-stable--recommended-for-oled-users)
+[![OLED Legacy: v1.2.2 Stable](https://img.shields.io/badge/OLED%20Legacy-v1.2.2%20Stable-brightgreen?style=flat-square)](#-1-argon-one-v5-oled-legacy-stable--recommended-for-oled-users)
 [![Case Essential: v1.2.0 Stable](https://img.shields.io/badge/Case%20Essential-v1.2.0%20Stable-00b4d8?style=flat-square)](#-2-argon-one-v5-essential-hardware--performance-setup-for-all-cases)
 [![OLED Experimental: v1.1.0 Alpha](https://img.shields.io/badge/OLED%20Experimental-v1.1.0%20Alpha-orange?style=flat-square)](#-3-argon-one-v5-oled-experimental-next-gen-suite--visual-card-studio)
 [![Platform: Raspberry Pi 5 (arm64)](https://img.shields.io/badge/Platform-Raspberry%20Pi%205%20(arm64)-c51a4a?style=flat-square)](https://www.raspberrypi.com/)
@@ -18,8 +18,8 @@ Because the **Argon ONE V5** case can be operated **with or without** the option
 
 | Package | File Name | Target Audience & Purpose |
 | :--- | :--- | :--- |
-| **1. [Argon ONE V5 OLED Legacy](#-1-argon-one-v5-oled-legacy-stable--recommended-for-oled-users)** | [`argon-one-v5-oled-legacy_1.2.1_arm64.deb`](https://github.com/GamingTux/argon-one-v5/releases/tag/v1.2.1-legacy) | **Stable / Production OLED Driver:** Pure-C 1:1 recreation of all original Argon ONE V5 OLED screens, fonts, and GPIO4 button actions—upgraded with **30 Hz SSD1306 partial updates**, **smooth vertical digit roll transitions**, **30 FPS bar animation**, **live `HH:MM:SS` clock**, calibrated thermometer bar, and **0% Python dependencies**. Contains strictly OLED-related configuration (`i2c-dev`). |
-| **2. [Argon ONE V5 Essential](#-2-argon-one-v5-essential-hardware--performance-setup-for-all-cases)** | [`argon-one-v5-essential_1.2.0_arm64.deb`](https://github.com/GamingTux/argon-one-v5/releases/tag/v1.2.1-legacy) | **Universal Case & Performance Setup (With or Without OLED):** Configures Front USB 2.0 ports (`dwc2`), UART0 shutdown power-cut, Pi 5 EEPROM (`PSU_MAX_CURRENT=5000`, `POWER_OFF_ON_HALT=1`, `SDRAM_BANKLOW=1`), M.2 NVMe PCIe Gen 3 + ASPM `performance`, safe 2.8 GHz CPU boost, `schedutil` (1ms) / `ondemand` (10ms) CPU governor, 4-stage kernel PWM fan curve, 4-core Network RPS/RFS + GICv2 IRQ spread, LZ4 ZRAM + LPDDR4X RAM priority, TCP BBR, Wi-Fi `power_save off`, and I/O queue optimizations. |
+| **1. [Argon ONE V5 OLED Legacy](#-1-argon-one-v5-oled-legacy-stable--recommended-for-oled-users)** | [`argon-one-v5-oled-legacy_1.2.2_arm64.deb`](https://github.com/GamingTux/argon-one-v5/releases/tag/v1.2.2-legacy) | **Stable / Production OLED Driver:** Pure-C 1:1 recreation of all original Argon ONE V5 OLED screens, fonts, and GPIO4 button actions—upgraded with **30 Hz SSD1306 partial updates**, **smooth vertical digit roll transitions**, **30 FPS bar animation**, **live `HH:MM:SS` clock**, calibrated thermometer bar, and **0% Python dependencies**. Contains strictly OLED-related configuration (`i2c-dev`). |
+| **2. [Argon ONE V5 Essential](#-2-argon-one-v5-essential-hardware--performance-setup-for-all-cases)** | [`argon-one-v5-essential_1.2.0_arm64.deb`](https://github.com/GamingTux/argon-one-v5/releases/tag/v1.2.2-legacy) | **Universal Case & Performance Setup (With or Without OLED):** Configures Front USB 2.0 ports (`dwc2`), UART0 shutdown power-cut, Pi 5 EEPROM (`PSU_MAX_CURRENT=5000`, `POWER_OFF_ON_HALT=1`, `SDRAM_BANKLOW=1`), M.2 NVMe PCIe Gen 3 + ASPM `performance`, safe 2.8 GHz CPU boost, `schedutil` (1ms) / `ondemand` (10ms) CPU governor, 4-stage kernel PWM fan curve, 4-core Network RPS/RFS + GICv2 IRQ spread, LZ4 ZRAM + LPDDR4X RAM priority, TCP BBR, Wi-Fi `power_save off`, and I/O queue optimizations. |
 | **3. [Argon ONE V5 OLED Experimental](#-3-argon-one-v5-oled-experimental-next-gen-suite--visual-card-studio)** | [`argon-one-v5-oled-experimental_1.1.0_arm64.deb`](https://github.com/GamingTux/argon-one-v5/releases/tag/v1.1.0-alpha) | **Alpha / Work in Progress:** Next-generation OLED dashboard with a Desktop Control Center, WYSIWYG Visual Card Studio (`argon-card-builder`), hardware sensor scanner, and handcrafted **1-bit Terminus Bold** pixel typography. |
 
 ---
@@ -28,7 +28,7 @@ Because the **Argon ONE V5** case can be operated **with or without** the option
 
 The official Argon40 Python daemon (`argononed.py` + `argononeoled.py`) relies on `python3-luma.oled`, blanks the screen on every page switch (causing visible flicker), re-opens font files on every text draw, and only refreshes values once every 60 seconds.
 
-**`argon-one-v5-oled-legacy` (`v1.2.1`)** replaces the entire Python stack with a **single ~65 KB native C binary**:
+**`argon-one-v5-oled-legacy` (`v1.2.2`)** replaces the entire Python stack with a **single ~65 KB native C binary**:
 
 * **100% Original Look & Feel + Fixes:** All original Argon ONE V5 background bitmaps (`clock`, `cpu`, `storage`, `raid`, `ram`, `temp`, `ip`, `logo1v5`) and bitmap fonts (`6×8`, `8×16`) are compiled directly into the C executable—now featuring a **live `HH:MM:SS` seconds clock** and a **tick-calibrated thermometer mercury bar** on the `temp` card (`20 °C – 85 °C`).
 * **30 Hz Vertical Digit Roll Transitions + Smooth Bar Animation & SSD1306 Partial Updates:** Updates numeric text once per second (`1 Hz`) with a **smooth 30 FPS vertical digit roll animation** (only changed digits roll upward), animates CPU & thermometer bars at **30 FPS (`33 ms`)**, and uses SSD1306 Hardware Window Addressing (`0x21`/`0x22`) to transmit **only the exact pixels that changed**.
@@ -41,8 +41,8 @@ The official Argon40 Python daemon (`argononed.py` + `argononeoled.py`) relies o
 
 ### Quick Install — `Argon ONE V5 OLED Legacy`
 ```bash
-wget https://github.com/GamingTux/argon-one-v5/releases/download/v1.2.1-legacy/argon-one-v5-oled-legacy_1.2.1_arm64.deb
-sudo apt install ./argon-one-v5-oled-legacy_1.2.1_arm64.deb
+wget https://github.com/GamingTux/argon-one-v5/releases/download/v1.2.2-legacy/argon-one-v5-oled-legacy_1.2.2_arm64.deb
+sudo apt install ./argon-one-v5-oled-legacy_1.2.2_arm64.deb
 ```
 
 ### Interactive OLED Configuration
@@ -80,7 +80,7 @@ screenlist="clock cpu storage ram temp ip"
 
 ### Quick Install & Status Check — `Argon ONE V5 Essential`
 ```bash
-wget https://github.com/GamingTux/argon-one-v5/releases/download/v1.2.1-legacy/argon-one-v5-essential_1.2.0_arm64.deb
+wget https://github.com/GamingTux/argon-one-v5/releases/download/v1.2.2-legacy/argon-one-v5-essential_1.2.0_arm64.deb
 sudo apt install ./argon-one-v5-essential_1.2.0_arm64.deb
 
 # Inspect active case hardware and performance settings:
@@ -153,7 +153,7 @@ sudo apt install -y build-essential libgpiod-dev libgpiod3 i2c-tools python3 pyt
 
 make packages       # Builds all 3 .deb packages in dist/
 # Or individually:
-make deb-legacy       # -> dist/argon-one-v5-oled-legacy_1.2.1_arm64.deb
+make deb-legacy       # -> dist/argon-one-v5-oled-legacy_1.2.2_arm64.deb
 make deb-essential    # -> dist/argon-one-v5-essential_1.2.0_arm64.deb
 make deb-experimental # -> dist/argon-one-v5-oled-experimental_1.1.0_arm64.deb
 ```

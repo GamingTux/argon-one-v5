@@ -465,7 +465,7 @@ static void reset_text_slots(void) {
 
 static bool any_text_animating(void) {
     for (int i = 0; i < MAX_TEXT_SLOTS; i++) {
-        if (g_text_slots[i].used && g_text_slots[i].anim_step < TEXT_ANIM_STEPS) {
+        if (g_text_slots[i].used && g_text_slots[i].anim_step <= TEXT_ANIM_STEPS) {
             return true;
         }
     }
@@ -474,7 +474,7 @@ static bool any_text_animating(void) {
 
 static void step_text_slots(void) {
     for (int i = 0; i < MAX_TEXT_SLOTS; i++) {
-        if (g_text_slots[i].used && g_text_slots[i].anim_step < TEXT_ANIM_STEPS) {
+        if (g_text_slots[i].used && g_text_slots[i].anim_step <= TEXT_ANIM_STEPS) {
             g_text_slots[i].anim_step++;
         }
     }
@@ -528,7 +528,7 @@ static void oled_writetext(const char *textdata, int x, int y, int charwd, int m
                 slot->charwd = charwd;
                 snprintf(slot->prev_text, sizeof(slot->prev_text), "%s", textdata);
                 snprintf(slot->curr_text, sizeof(slot->curr_text), "%s", textdata);
-                slot->anim_step = TEXT_ANIM_STEPS;
+                slot->anim_step = TEXT_ANIM_STEPS + 1;
                 break;
             }
         }
@@ -1185,7 +1185,7 @@ static bool render_card(const char *screen_name, int page_subidx, int *out_pages
         return true;
 
     } else {
-        // Default: "clock" with live HH:MM:SS seconds display (queried 2x per second / every 500ms)
+        // Default: "clock" with live HH:MM:SS seconds display synced to exact wall-clock second
         oled_loadbg("bgtime");
         static const char *weekday_names[] = { "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" };
         static const char *month_names[] = {
@@ -1193,12 +1193,11 @@ static bool render_card(const char *screen_name, int page_subidx, int *out_pages
             "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"
         };
         static struct tm cached_tm;
-        static uint64_t last_clock_ms = 0;
-        uint64_t now_ms = get_monotonic_ms();
-        if (last_clock_ms == 0 || (now_ms - last_clock_ms) >= 500ULL) {
-            time_t now = time(NULL);
+        static time_t last_clock_sec = 0;
+        time_t now = time(NULL);
+        if (now != last_clock_sec) {
             localtime_r(&now, &cached_tm);
-            last_clock_ms = now_ms;
+            last_clock_sec = now;
         }
 
         char md_str[16];
@@ -1380,7 +1379,7 @@ int main(int argc, char **argv) {
     uint64_t screensaver_start_ms = last_switch_ms;
     uint64_t last_telemetry_ms = 0;
     uint64_t last_digits_ms = 0;
-    uint64_t last_clock_tick_ms = 0;
+    time_t last_wall_sec = 0;
     float live_temp = g_cur_temp;
 
     // 30 Hz (33.33 ms) Render & Partial-Flush Loop with Idle-Frame Skipping
@@ -1463,10 +1462,11 @@ int main(int argc, char **argv) {
                 need_render = true;
             }
 
-            // Trigger 500ms (2 Hz) check when on the clock card
-            if (screen_id < g_cfg.screen_count && strcmp(g_cfg.screen_list[screen_id], "clock") == 0) {
-                if (last_clock_tick_ms == 0 || (frame_start_ms - last_clock_tick_ms) >= 500ULL) {
-                    last_clock_tick_ms = frame_start_ms;
+            // Trigger exact wall-clock second transition (zero-syscall vDSO read) when on the clock card
+            time_t now_sec = time(NULL);
+            if (now_sec != last_wall_sec) {
+                last_wall_sec = now_sec;
+                if (screen_id < g_cfg.screen_count && strcmp(g_cfg.screen_list[screen_id], "clock") == 0) {
                     need_render = true;
                 }
             }
