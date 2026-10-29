@@ -84,18 +84,24 @@ typedef struct {
 
 static LegacyConfig g_cfg;
 
-// CPU Snapshot state for non-blocking live per-core usage
+// CPU Snapshot state for 30 Hz sliding-window live per-core usage
 typedef struct {
     uint64_t total;
     uint64_t idle;
 } CoreSnap;
 
 #define MAX_CORES 16
-static CoreSnap g_prev_cores[MAX_CORES];
+#define CPU_RING_SIZE 10  // 10 frames @ 30Hz = ~333ms sliding window (~33 kernel ticks)
+static CoreSnap g_cpu_ring[CPU_RING_SIZE][MAX_CORES];
+static int g_cpu_ring_head = 0;
+static int g_cpu_ring_count = 0;
+static int g_stat_fd = -1;
+static int g_temp_fd = -1;
+
+static float g_live_core[MAX_CORES];
 static int g_core_usage[MAX_CORES];
 static float g_smooth_core[MAX_CORES];
 static int g_num_cores = 0;
-static bool g_cpu_initialized = false;
 static float g_cur_temp = 40.0f;
 static float g_smooth_temp = 40.0f;
 
@@ -483,12 +489,23 @@ static void oled_writetextaligned(const char *textdata, int x, int y, int boxwid
 // System Information (Direct C Kernel Interfaces - 0 Shell Spawning)
 // ============================================================================
 static void update_cpu_usage(void) {
-    FILE *fp = fopen("/proc/stat", "r");
-    if (!fp) return;
+    if (g_stat_fd < 0) {
+        g_stat_fd = open("/proc/stat", O_RDONLY | O_CLOEXEC);
+        if (g_stat_fd < 0) return;
+    }
 
-    char line[256];
+    char buf[2048];
+    ssize_t n = pread(g_stat_fd, buf, sizeof(buf) - 1, 0);
+    if (n <= 0) return;
+    buf[n] = '\0';
+
+    int oldest_idx = (g_cpu_ring_count < CPU_RING_SIZE)
+                     ? 0
+                     : g_cpu_ring_head;
+
     int core_idx = 0;
-    while (fgets(line, sizeof(line), fp)) {
+    char *line_save = NULL;
+    for (char *line = strtok_r(buf, "\n", &line_save); line; line = strtok_r(NULL, "\n", &line_save)) {
         if (strncmp(line, "cpu", 3) == 0 && line[3] >= '0' && line[3] <= '9') {
             int cid = atoi(&line[3]);
             if (cid < 0 || cid >= MAX_CORES) continue;
@@ -500,40 +517,54 @@ static void update_cpu_usage(void) {
             uint64_t total = 0, idle = 0;
             int col = 1;
             char *saveptr = NULL;
-            for (char *tok = strtok_r(p, " \t\n", &saveptr); tok; tok = strtok_r(NULL, " \t\n", &saveptr)) {
+            for (char *tok = strtok_r(p, " \t", &saveptr); tok; tok = strtok_r(NULL, " \t", &saveptr)) {
                 uint64_t v = strtoull(tok, NULL, 10);
                 if (col == 4 || col == 5) idle += v;
                 total += v;
                 col++;
             }
 
-            if (g_cpu_initialized && total > g_prev_cores[cid].total) {
-                uint64_t dt = total - g_prev_cores[cid].total;
-                uint64_t di = idle - g_prev_cores[cid].idle;
-                g_core_usage[cid] = (int)(100ULL * (dt - di) / dt);
-                if (g_core_usage[cid] < 0) g_core_usage[cid] = 0;
-                if (g_core_usage[cid] > 100) g_core_usage[cid] = 100;
-            } else if (!g_cpu_initialized) {
-                g_core_usage[cid] = 0;
+            if (g_cpu_ring_count > 0) {
+                uint64_t prev_total = g_cpu_ring[oldest_idx][cid].total;
+                uint64_t prev_idle  = g_cpu_ring[oldest_idx][cid].idle;
+                if (total > prev_total) {
+                    uint64_t dt = total - prev_total;
+                    uint64_t di = (idle >= prev_idle) ? (idle - prev_idle) : 0;
+                    uint64_t busy = (dt >= di) ? (dt - di) : 0;
+                    float pct = (100.0f * (float)busy) / (float)dt;
+                    if (pct < 0.0f) pct = 0.0f;
+                    if (pct > 100.0f) pct = 100.0f;
+                    g_live_core[cid] = pct;
+                }
+            } else {
+                g_live_core[cid] = 0.0f;
             }
-            g_prev_cores[cid].total = total;
-            g_prev_cores[cid].idle = idle;
+
+            g_cpu_ring[g_cpu_ring_head][cid].total = total;
+            g_cpu_ring[g_cpu_ring_head][cid].idle  = idle;
             if (cid + 1 > core_idx) core_idx = cid + 1;
         }
     }
-    fclose(fp);
+
     if (core_idx > 0) {
         g_num_cores = core_idx;
-        g_cpu_initialized = true;
+        g_cpu_ring_head = (g_cpu_ring_head + 1) % CPU_RING_SIZE;
+        if (g_cpu_ring_count < CPU_RING_SIZE) {
+            g_cpu_ring_count++;
+        }
     }
 }
 
 static float get_cpu_temp(void) {
-    FILE *fp = fopen("/sys/class/thermal/thermal_zone0/temp", "r");
-    if (!fp) return 0.0f;
-    int raw = 0;
-    if (fscanf(fp, "%d", &raw) != 1) raw = 0;
-    fclose(fp);
+    if (g_temp_fd < 0) {
+        g_temp_fd = open("/sys/class/thermal/thermal_zone0/temp", O_RDONLY | O_CLOEXEC);
+        if (g_temp_fd < 0) return 0.0f;
+    }
+    char buf[32];
+    ssize_t n = pread(g_temp_fd, buf, sizeof(buf) - 1, 0);
+    if (n <= 0) return 0.0f;
+    buf[n] = '\0';
+    int raw = atoi(buf);
     return (float)raw / 1000.0f;
 }
 
@@ -876,8 +907,15 @@ static bool render_card(const char *screen_name, int page_subidx, int *out_pages
         return true;
 
     } else if (strcmp(screen_name, "storage") == 0) {
-        StorageItem items[12];
-        int total_items = list_storage(items, 12);
+        static StorageItem cached_items[12];
+        static int cached_total = 0;
+        static uint64_t last_storage_ms = 0;
+        uint64_t now_ms = get_monotonic_ms();
+        if (last_storage_ms == 0 || (now_ms - last_storage_ms) >= 1000ULL) {
+            cached_total = list_storage(cached_items, 12);
+            last_storage_ms = now_ms;
+        }
+        int total_items = cached_total;
         if (total_items <= 0) return false;
 
         int pages = (total_items + 2) / 3;
@@ -887,7 +925,7 @@ static bool render_card(const char *screen_name, int page_subidx, int *out_pages
         oled_loadbg("bgstorage");
         int yoffset = 16;
         for (int i = 0; i < 3 && (start_idx + i) < total_items; i++) {
-            StorageItem *it = &items[start_idx + i];
+            StorageItem *it = &cached_items[start_idx + i];
             char pct_str[16];
             snprintf(pct_str, sizeof(pct_str), "%d%%", it->usage);
             oled_writetextaligned(it->value, 77, yoffset, OLED_WIDTH - 77, 2, FONT_WD_SML, 0);
@@ -901,12 +939,19 @@ static bool render_card(const char *screen_name, int page_subidx, int *out_pages
         return true;
 
     } else if (strcmp(screen_name, "raid") == 0) {
-        RaidItem raids[4];
-        int total_raids = list_raid(raids, 4, NULL, NULL);
+        static RaidItem cached_raids[4];
+        static int cached_raids_cnt = 0;
+        static uint64_t last_raid_ms = 0;
+        uint64_t now_ms = get_monotonic_ms();
+        if (last_raid_ms == 0 || (now_ms - last_raid_ms) >= 1000ULL) {
+            cached_raids_cnt = list_raid(cached_raids, 4, NULL, NULL);
+            last_raid_ms = now_ms;
+        }
+        int total_raids = cached_raids_cnt;
         if (total_raids <= 0) return false;
         if (out_pages) *out_pages = total_raids;
 
-        RaidItem *r = &raids[page_subidx % total_raids];
+        RaidItem *r = &cached_raids[page_subidx % total_raids];
         oled_loadbg("bgraid");
         oled_writetextaligned(r->title, 0, 0, STD_LEFT_OFFSET, 1, FONT_WD_SML, 0);
         oled_writetextaligned(r->level, 0, 8, STD_LEFT_OFFSET, 1, FONT_WD_SML, 0);
@@ -967,10 +1012,15 @@ static bool render_card(const char *screen_name, int page_subidx, int *out_pages
         return true;
 
     } else if (strcmp(screen_name, "ip") == 0) {
+        static char cached_ip[32] = "N/A";
+        static uint64_t last_ip_ms = 0;
+        uint64_t now_ms = get_monotonic_ms();
+        if (last_ip_ms == 0 || (now_ms - last_ip_ms) >= 1000ULL) {
+            get_ip_addr(cached_ip, sizeof(cached_ip));
+            last_ip_ms = now_ms;
+        }
         oled_loadbg("bgip");
-        char ip[32];
-        get_ip_addr(ip, sizeof(ip));
-        oled_writetextaligned(ip, 0, 8, OLED_WIDTH, 1, FONT_WD_REG, 0);
+        oled_writetextaligned(cached_ip, 0, 8, OLED_WIDTH, 1, FONT_WD_REG, 0);
         return true;
 
     } else if (strcmp(screen_name, "logo1v5") == 0) {
@@ -1245,18 +1295,24 @@ int main(int argc, char **argv) {
         }
 
         if (!screensaver_mode) {
-            // Sample raw CPU & temperature telemetry at configured interval (default 1000ms)
-            if (last_telemetry_ms == 0 || (frame_start_ms - last_telemetry_ms) >= (uint64_t)g_cfg.refresh_ms) {
-                update_cpu_usage();
-                g_cur_temp = get_cpu_temp();
+            // Sample CPU (30 Hz sliding ring-buffer) & temperature every frame (30x per second)
+            update_cpu_usage();
+            float live_temp = get_cpu_temp();
+
+            // 30 Hz instant smooth bar tracking (EMA)
+            for (int i = 0; i < MAX_CORES; i++) {
+                g_smooth_core[i] += (g_live_core[i] - g_smooth_core[i]) * 0.45f;
+            }
+            g_smooth_temp += (live_temp - g_smooth_temp) * 0.45f;
+
+            // Update readable numeric text digits 4x per second (every 250ms)
+            if (last_telemetry_ms == 0 || (frame_start_ms - last_telemetry_ms) >= 250ULL) {
+                for (int i = 0; i < MAX_CORES; i++) {
+                    g_core_usage[i] = (int)(g_smooth_core[i] + 0.5f);
+                }
+                g_cur_temp = g_smooth_temp;
                 last_telemetry_ms = frame_start_ms;
             }
-
-            // 30 Hz smooth bar interpolation (EMA)
-            for (int i = 0; i < MAX_CORES; i++) {
-                g_smooth_core[i] += ((float)g_core_usage[i] - g_smooth_core[i]) * 0.25f;
-            }
-            g_smooth_temp += (g_cur_temp - g_smooth_temp) * 0.25f;
 
             // Render active card at 30 Hz & transmit only dirty pixels over I2C
             int tries = 0;
